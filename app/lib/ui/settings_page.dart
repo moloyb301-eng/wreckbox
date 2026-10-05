@@ -15,6 +15,7 @@ import '../settings.dart';
 import '../soulseek.dart';
 import '../spotify.dart';
 import '../store.dart';
+import '../youtube.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -30,6 +31,8 @@ class _SettingsPageState extends State<SettingsPage> {
   final s = Settings.current;
   late final clientId = TextEditingController(text: s.spotifyClientId);
   late final dropboxKey = TextEditingController(text: s.dropboxAppKey);
+  late final googleId = TextEditingController(text: s.googleClientId);
+  late final googleSecret = TextEditingController(text: s.googleClientSecret);
   late final dropboxFolder = TextEditingController(text: s.dropboxFolder);
   late final name = TextEditingController(text: s.reporterName);
   late final contact = TextEditingController(text: s.reporterContact);
@@ -49,6 +52,8 @@ class _SettingsPageState extends State<SettingsPage> {
     s
       ..spotifyClientId = clientId.text.trim()
       ..dropboxAppKey = dropboxKey.text.trim()
+      ..googleClientId = googleId.text.trim()
+      ..googleClientSecret = googleSecret.text.trim()
       ..dropboxFolder = dropboxFolder.text.trim().isEmpty ? '/Music' : dropboxFolder.text.trim()
       ..reporterName = name.text.trim()
       ..reporterContact = contact.text.trim();
@@ -145,6 +150,37 @@ class _SettingsPageState extends State<SettingsPage> {
           PillButton(label: importing ? 'Importing…' : 'Import my playlists', icon: Icons.download, style: PillStyle.primary, onTap: importing ? null : _importSpotify),
           if (status.isNotEmpty) Text(status, style: T.ui(12.5, FontWeight.w400, T.text2)),
         ]),
+      ]),
+      section('YouTube (optional)', [
+        Text('Bring in your YouTube and YouTube Music playlists and liked music. Songs that are also on Spotify merge into one entry. This imports the playlists only — not audio.',
+            style: T.ui(13, FontWeight.w400, T.text2)),
+        const SizedBox(height: 12),
+        step(1, 'In Google Cloud Console create a project, then enable "YouTube Data API v3".'),
+        step(2, 'OAuth consent screen: External, add yourself as a user, then set Publishing status to "In production" (otherwise Google signs you out every 7 days; the "unverified app" warning is expected — it\'s your own app).'),
+        step(3, 'Credentials → Create OAuth client ID → type "Desktop app". Copy the Client ID and Client secret here.'),
+        PillButton(label: 'Open Google Cloud Console', icon: Icons.open_in_new, onTap: () => launchUrl(Uri.parse('https://console.cloud.google.com/apis/library/youtube.googleapis.com'), mode: LaunchMode.externalApplication)),
+        const SizedBox(height: 12),
+        field('Google Client ID', googleId, hint: '….apps.googleusercontent.com'),
+        field('Google Client secret', googleSecret, obscure: true),
+        PillButton(
+          label: importing ? 'Importing…' : 'Import my YouTube playlists',
+          icon: Icons.smart_display_outlined,
+          style: PillStyle.primary,
+          onTap: importing
+              ? null
+              : () async {
+                  await _saveAll();
+                  setState(() => importing = true);
+                  try {
+                    await YouTubeImport.run((line) => setState(() => status = line));
+                    await widget.store.load();
+                  } catch (e) {
+                    setState(() => status = '$e');
+                  } finally {
+                    setState(() => importing = false);
+                  }
+                },
+        ),
       ]),
       if (desktop && widget.soulseek != null)
         section('Soulseek', [

@@ -7,6 +7,9 @@ import 'paths.dart';
 class Settings {
   String spotifyClientId = '';
   String? spotifyRefreshToken;
+  String googleClientId = '';
+  String googleClientSecret = '';
+  String? googleRefreshToken;
   String dropboxAppKey = '';
   String? dropboxRefreshToken;
   String dropboxFolder = '/Music';
@@ -27,6 +30,9 @@ class Settings {
       current = Settings()
         ..spotifyClientId = j['spotifyClientId'] ?? ''
         ..spotifyRefreshToken = j['spotifyRefreshToken']
+        ..googleClientId = j['googleClientId'] ?? ''
+        ..googleClientSecret = j['googleClientSecret'] ?? ''
+        ..googleRefreshToken = j['googleRefreshToken']
         ..dropboxAppKey = j['dropboxAppKey'] ?? ''
         ..dropboxRefreshToken = j['dropboxRefreshToken']
         ..dropboxFolder = j['dropboxFolder'] ?? '/Music'
@@ -48,6 +54,9 @@ class Settings {
         const JsonEncoder.withIndent('  ').convert({
           'spotifyClientId': spotifyClientId,
           'spotifyRefreshToken': spotifyRefreshToken,
+          'googleClientId': googleClientId,
+          'googleClientSecret': googleClientSecret,
+          'googleRefreshToken': googleRefreshToken,
           'dropboxAppKey': dropboxAppKey,
           'dropboxRefreshToken': dropboxRefreshToken,
           'dropboxFolder': dropboxFolder,

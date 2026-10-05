@@ -13,24 +13,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'config.dart';
 import 'models.dart';
-import 'paths.dart';
 import 'settings.dart';
+import 'sources.dart';
 
 class SpotifyException implements Exception {
   final String message;
   SpotifyException(this.message);
   @override
   String toString() => message;
-}
-
-class _SpTrack {
-  final String? spotifyID, isrc, album, releaseDate, addedAt, artworkURL;
-  final String name;
-  final List<String> artists;
-  final int? durationMs;
-  final bool isLocal;
-  _SpTrack(this.spotifyID, this.name, this.artists, this.album, this.releaseDate, this.isrc, this.durationMs,
-      this.isLocal, this.addedAt, this.artworkURL);
 }
 
 class SpotifyImport {
@@ -150,8 +140,9 @@ class SpotifyImport {
     return items;
   }
 
-  static _SpTrack? _parse(Map<String, dynamic> item) {
-    final t = (item['track'] ?? item['item']) as Map<String, dynamic>?;
+  static SourceTrack? _parse(Map<String, dynamic> item) => parseTrack((item['track'] ?? item['item']) as Map<String, dynamic>?, item['added_at']);
+
+  static SourceTrack? parseTrack(Map<String, dynamic>? t, [String? addedAt]) {
     if (t == null || (t['type'] ?? 'track') != 'track') return null;
     final album = t['album'] as Map<String, dynamic>?;
     String? cover;
@@ -160,9 +151,36 @@ class SpotifyImport {
       images.sort((a, b) => ((a['width'] ?? 640) - 300).abs().compareTo(((b['width'] ?? 640) - 300).abs()));
       cover = images.first['url'];
     }
-    return _SpTrack(t['id'], t['name'] ?? '', [for (final a in (t['artists'] as List? ?? const [])) a['name'] as String],
-        album?['name'], album?['release_date'], (t['external_ids'] as Map?)?['isrc'], t['duration_ms'],
-        t['is_local'] ?? false, item['added_at'], cover);
+    return SourceTrack(
+      spotifyID: t['id'],
+      name: t['name'] ?? '',
+      artists: [for (final a in (t['artists'] as List? ?? const [])) a['name'] as String],
+      album: album?['name'],
+      releaseDate: album?['release_date'],
+      isrc: (t['external_ids'] as Map?)?['isrc'],
+      durationMs: t['duration_ms'],
+      isLocal: t['is_local'] ?? false,
+      addedAt: addedAt,
+      artworkURL: cover,
+    );
+  }
+
+  /// Best Spotify match for an artist + title (used to give YouTube imports proper metadata).
+  static Future<SourceTrack?> search(String token, String artist, String title) async {
+    final q = artist.isEmpty ? title : 'track:$title artist:$artist';
+    try {
+      final j = await _get(token, 'search?type=track&limit=5&q=${Uri.encodeQueryComponent(q)}');
+      final items = [for (final i in ((j['tracks'] as Map?)?['items'] as List? ?? const [])) Map<String, dynamic>.from(i)];
+      final want = normalized(title);
+      for (final it in items) {
+        final st = parseTrack(it);
+        if (st == null) continue;
+        final got = normalized(st.name);
+        final artistOk = artist.isEmpty || st.artists.any((a) => normalized(artist).contains(normalized(a)) || normalized(a).contains(normalized(artist)));
+        if (artistOk && (got == want || got.startsWith(want) || want.startsWith(got))) return st;
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Full import → library.json. `log` receives progress lines.
@@ -172,10 +190,9 @@ class SpotifyImport {
     final userID = me['id'] ?? '';
     log('Signed in as ${me['display_name'] ?? userID}');
     log('Fetching Liked Songs…');
-    final liked = (await _pages(token, 'me/tracks?limit=50')).map(_parse).whereType<_SpTrack>().toList();
+    final liked = (await _pages(token, 'me/tracks?limit=50')).map(_parse).whereType<SourceTrack>().toList();
     log('  ${liked.length} liked songs');
-    final sources = <(String, String?, bool, List<_SpTrack>)>[('Liked Songs', null, false, liked)];
-    final seenNames = <String, int>{'Liked Songs': 1};
+    final sources = <SourcePlaylist>[SourcePlaylist('Liked Songs', null, false, liked)];
     for (final p in await _pages(token, 'me/playlists?limit=50')) {
       final owner = p['owner'] as Map? ?? const {};
       final mine = owner['id'] == userID, collab = p['collaborative'] == true;
@@ -191,63 +208,14 @@ class SpotifyImport {
           continue;
         }
       }
-      var name = (p['name'] as String? ?? '').trim();
-      if (name.isEmpty) name = 'Untitled';
-      seenNames[name] = (seenNames[name] ?? 0) + 1;
-      if (seenNames[name]! > 1) name = '$name (${seenNames[name]})';
-      final tracks = items.map(_parse).whereType<_SpTrack>().toList();
+      final name = (p['name'] as String? ?? '').trim();
+      final tracks = items.map(_parse).whereType<SourceTrack>().toList();
       log('  $name: ${tracks.length} tracks');
-      sources.add((name, p['id'] as String?, collab, tracks));
+      sources.add(SourcePlaylist(name, p['id'] as String?, collab, tracks));
     }
-    final lib = build(userID, sources);
-    await writeAtomic(AppPaths.libraryFile, const JsonEncoder.withIndent('  ').convert(lib.toJson()));
-    log('Library: ${lib.tracks.length} unique tracks from ${lib.playlists.length} sources');
+    final lib = await Sources.save('spotify', userID, sources);
+    log('Library: ${lib.tracks.length} unique tracks from ${lib.playlists.length} playlists');
     return lib;
   }
 
-  /// One entry per recording (ISRC → Spotify id → artist/title/duration), tagged with every playlist it's in.
-  static Library build(String user, List<(String, String?, bool, List<_SpTrack>)> sources) {
-    final tracks = <LibraryTrack>[];
-    final index = <String, int>{};
-    final playlists = <LibraryPlaylist>[];
-    for (final (name, id, collab, list) in sources) {
-      final ids = <String>[];
-      for (final t in list) {
-        if (t.isLocal || t.name.isEmpty) continue;
-        final fuzzy = 'na:${normalized(t.artists.isEmpty ? '' : t.artists.first)}|${normalized(t.name)}|${(t.durationMs ?? 0) ~/ 5000}';
-        final keys = [if (t.isrc != null) 'isrc:${t.isrc!.toUpperCase()}', if (t.spotifyID != null) 'sp:${t.spotifyID}', fuzzy];
-        final hit = keys.map((k) => index[k]).whereType<int>().firstOrNull;
-        if (hit != null) {
-          final old = tracks[hit];
-          tracks[hit] = LibraryTrack(
-            id: old.id, artists: old.artists, title: old.title, album: old.album, year: old.year, isrc: old.isrc,
-            spotifyIDs: {...old.spotifyIDs, if (t.spotifyID != null) t.spotifyID!}.toList(),
-            durationMs: old.durationMs,
-            playlists: old.playlists.contains(name) ? old.playlists : [...old.playlists, name],
-            firstAdded: [old.firstAdded, t.addedAt].whereType<String>().fold<String?>(null, (a, b) => a == null || b.compareTo(a) < 0 ? b : a),
-            fileName: old.fileName, artworkURL: old.artworkURL ?? t.artworkURL,
-          );
-          for (final k in keys) {
-            index[k] = hit;
-          }
-          ids.add(old.id);
-          continue;
-        }
-        final tid = t.isrc?.toUpperCase() ?? (t.spotifyID != null ? 'spotify:${t.spotifyID}' : fuzzy);
-        tracks.add(LibraryTrack(
-          id: tid, artists: t.artists, title: t.name, album: t.album,
-          year: t.releaseDate != null && t.releaseDate!.length >= 4 ? t.releaseDate!.substring(0, 4) : null,
-          isrc: t.isrc?.toUpperCase(), spotifyIDs: [if (t.spotifyID != null) t.spotifyID!], durationMs: t.durationMs,
-          playlists: [name], firstAdded: t.addedAt, fileName: safeFileName('${t.artists.join(', ')} - ${t.name}'),
-          artworkURL: t.artworkURL,
-        ));
-        for (final k in keys) {
-          index[k] = tracks.length - 1;
-        }
-        ids.add(tid);
-      }
-      playlists.add(LibraryPlaylist(name: name, spotifyID: id, collaborative: collab, trackIDs: ids));
-    }
-    return Library(builtAt: DateTime.now(), spotifyUser: user, tracks: tracks, playlists: playlists);
-  }
 }
