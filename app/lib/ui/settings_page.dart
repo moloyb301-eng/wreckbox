@@ -19,6 +19,7 @@ import '../soulseek.dart';
 import '../spotify.dart';
 import '../store.dart';
 import '../youtube.dart';
+import 'account_ui.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -137,6 +138,8 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 6),
       Text('Setup', style: T.ui(32, FontWeight.w500)),
       const SizedBox(height: 18),
+      AccountSection(store: widget.store, onChanged: () => setState(() {})),
+      const SizedBox(height: 16),
       section('Import playlists', smart: widget.store.library == null, [
         Text('Bring in your Spotify and YouTube playlists as CSV files — no accounts or developer keys needed. Re-import any time; a playlist with the same name is replaced.',
             style: T.ui(13, FontWeight.w400, T.text2)),

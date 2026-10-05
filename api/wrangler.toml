@@ -1,0 +1,12 @@
+name = "wreckbox-api"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wreckbox-accounts"
+database_id = "38602df6-d0b3-4cf1-b86d-54c067a709a8"
+
+[[kv_namespaces]]
+binding = "LIBRARY"
+id = "ae66e1e41e0a4523a1fc000508d4c228"

@@ -7,6 +7,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models.dart';
 import '../phone_sync.dart';
+import '../settings.dart';
+import '../tunnel.dart';
+import '../account.dart';
+import 'account_ui.dart';
 import '../services.dart';
 import '../soulseek.dart';
 import '../store.dart';
@@ -21,8 +25,9 @@ class DesktopShell extends StatefulWidget {
   final Soulseek soulseek;
   final PhoneSyncServer phoneServer;
   final Dropbox dropbox;
+  final Tunnel? tunnel;
   final UpdateInfo? update;
-  const DesktopShell({super.key, required this.store, required this.soulseek, required this.phoneServer, required this.dropbox, this.update});
+  const DesktopShell({super.key, required this.store, required this.soulseek, required this.phoneServer, required this.dropbox, this.tunnel, this.update});
   @override
   State<DesktopShell> createState() => _DesktopShellState();
 }
@@ -182,7 +187,7 @@ class _DesktopShellState extends State<DesktopShell> {
       case 'soulseek':
         return _SoulseekPage(soulseek: widget.soulseek, store: store, header: header);
       case 'phone':
-        return _PhonePage(server: widget.phoneServer, header: header);
+        return _PhonePage(server: widget.phoneServer, header: header, store: store, tunnel: widget.tunnel);
       case 'queue':
         return _QueuePage(store: store, soulseek: widget.soulseek, header: header);
       case 'home':
@@ -437,7 +442,9 @@ class _SoulseekPageState extends State<_SoulseekPage> {
 class _PhonePage extends StatefulWidget {
   final PhoneSyncServer server;
   final Widget Function(String, String, String, [List<Widget>]) header;
-  const _PhonePage({required this.server, required this.header});
+  final LibraryStore store;
+  final Tunnel? tunnel;
+  const _PhonePage({required this.server, required this.header, required this.store, this.tunnel});
   @override
   State<_PhonePage> createState() => _PhonePageState();
 }
@@ -509,6 +516,41 @@ class _PhonePageState extends State<_PhonePage> {
           ),
         ]),
       ),
+      const SizedBox(height: 16),
+      AccountSection(store: widget.store, onChanged: () => setState(() {})),
+      if (widget.tunnel != null && Account.signedIn) ...[
+        const SizedBox(height: 12),
+        ListenableBuilder(
+          listenable: widget.tunnel!,
+          builder: (context, _) => Glass(
+            smart: widget.tunnel!.running,
+            radius: 20,
+            padding: const EdgeInsets.all(18),
+            child: Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const DotLabel('Use from anywhere', color: T.text),
+                  const SizedBox(height: 6),
+                  Text('Your phone (signed in to the same account) can stream and download from this computer away from home — while it\'s on and WreckBox is open.',
+                      style: T.ui(12.5, FontWeight.w400, T.text2)),
+                  const SizedBox(height: 6),
+                  Text(widget.tunnel!.status, style: T.ui(12.5, FontWeight.w600, widget.tunnel!.running ? T.lilac : T.text2)),
+                ]),
+              ),
+              Switch(
+                value: Settings.current.shareRemotely,
+                activeThumbColor: T.lilac,
+                onChanged: (v) async {
+                  Settings.current.shareRemotely = v;
+                  await Settings.current.save();
+                  v ? widget.tunnel!.start() : widget.tunnel!.stop();
+                  setState(() {});
+                },
+              ),
+            ]),
+          ),
+        ),
+      ],
     ]);
   }
 }

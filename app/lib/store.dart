@@ -24,9 +24,11 @@ class TrackRow {
 
   String get id => track.id;
   TrackStatus get status => state?.status ?? TrackStatus.missing;
-  double? get bpm => file?.bpm;
-  String get camelot => file?.camelot ?? '';
-  double? get energy => file?.energy;
+  /// From this device's own analysis, else the computer's (via the account).
+  Map<String, dynamic>? remote;
+  double? get bpm => file?.bpm ?? (remote?['bpm'] as num?)?.toDouble();
+  String get camelot => file?.camelot ?? remote?['camelot'] ?? '';
+  double? get energy => file?.energy ?? (remote?['energy'] as num?)?.toDouble();
   String get durationText {
     final ms = track.durationMs;
     if (ms == null) return '';
@@ -41,6 +43,9 @@ class LibraryStore extends ChangeNotifier {
   AppState state = AppState();
   Map<String, FileAnalysis> analysis = {};
   Map<String, double> catalogueBpm = {}; // track id → Deezer BPM (0 = none)
+  /// Phone: the computer's per-track summary from the account (status, bpm, key, energy) — shown for songs that
+  /// aren't on the phone, and kept for when the computer is off.
+  Map<String, dynamic> remoteCrate = {};
   String? loadError;
   String? busy;
   String? focus; // track shown in the inspector
@@ -86,7 +91,19 @@ class LibraryStore extends ChangeNotifier {
       }
     } catch (_) {}
     if (state.scanFolders.isEmpty) state.scanFolders = defaultScanFolders();
+    try {
+      final f = File(p.join(AppPaths.cache.path, 'remote_crate.json'));
+      if (await f.exists()) remoteCrate = Map<String, dynamic>.from(jsonDecode(await f.readAsString()));
+    } catch (_) {}
     notifyListeners();
+  }
+
+  Future<void> saveRemoteCrate() => writeAtomic(File(p.join(AppPaths.cache.path, 'remote_crate.json')), jsonEncode(remoteCrate));
+
+  /// Replace the library with one from the account / computer, keeping this device's own state.
+  Future<void> adoptLibraryJson(String json) async {
+    await writeAtomic(AppPaths.libraryFile, json);
+    await load();
   }
 
   List<String> defaultScanFolders() => [
@@ -137,7 +154,7 @@ class LibraryStore extends ChangeNotifier {
     if (t == null) return null;
     final st = state.tracks[id];
     final f = st?.localPath != null ? analysis[st!.localPath!] : null;
-    return TrackRow(t, st, f, genreOf(id, f));
+    return TrackRow(t, st, f, genreOf(id, f))..remote = remoteCrate[id] as Map<String, dynamic>?;
   }
 
   List<TrackRow> rows({ListFilter filter = ListFilter.all, String? playlist, String search = ''}) {

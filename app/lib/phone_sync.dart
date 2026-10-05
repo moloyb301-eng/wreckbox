@@ -24,6 +24,8 @@ import 'settings.dart';
 import 'store.dart';
 
 class PhoneSyncServer {
+  /// The sync port (WRECKBOX_SYNC_PORT overrides it, e.g. to test next to another WreckBox).
+  static int get port => int.tryParse(Platform.environment['WRECKBOX_SYNC_PORT'] ?? '') ?? AppConfig.phoneSyncPort;
   final LibraryStore store;
   HttpServer? _server;
   PhoneSyncServer(this.store);
@@ -64,7 +66,7 @@ class PhoneSyncServer {
 
   Future<String> pairingUri() async {
     final ips = await localAddresses();
-    return 'wreckbox://pair?hosts=${ips.join(',')}&port=${AppConfig.phoneSyncPort}&t=$token';
+    return 'wreckbox://pair?hosts=${ips.join(',')}&port=$port&t=$token';
   }
 
   Future<void> start() async {
@@ -80,7 +82,7 @@ class PhoneSyncServer {
         return f == null ? Response.notFound('') : Response.ok(f.openRead(), headers: {'content-type': 'image/jpeg'});
       });
     final handler = const Pipeline().addMiddleware(_auth()).addHandler(r.call);
-    _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, AppConfig.phoneSyncPort);
+    _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
   }
 
   Future<void> stop() async {

@@ -16,6 +16,8 @@ import '../services.dart';
 import '../settings.dart';
 import '../store.dart';
 import 'bug_report.dart';
+import 'account_ui.dart';
+import '../account.dart';
 import 'player_bar.dart';
 import 'settings_page.dart';
 import 'theme.dart';
@@ -269,10 +271,35 @@ class _ComputerPageState extends State<_ComputerPage> {
     }
   }
 
+  List<RemoteComputer>? computers;
+
   @override
   void initState() {
     super.initState();
-    if (Settings.current.pairedDesktop != null) _load();
+    if (Account.signedIn) {
+      _findComputers();
+    } else if (Settings.current.pairedDesktop != null) {
+      _load();
+    }
+  }
+
+  /// Signed in: list the account's computers and connect to the remembered one (its address may have changed).
+  Future<void> _findComputers() async {
+    setState(() => status = 'Looking for your computers…');
+    try {
+      final list = await Account.computers();
+      setState(() => computers = list);
+      final c = await AccountConnect.reconnect();
+      if (c != null) {
+        await _load();
+      } else {
+        setState(() => status = list.isEmpty
+            ? 'No computer in your account yet. On your computer: Sync to phone → sign in → Use from anywhere.'
+            : 'Your computers are offline. Open WreckBox on your computer with "Use from anywhere" on.');
+      }
+    } catch (e) {
+      setState(() => status = '$e');
+    }
   }
 
   /// Fallback when the camera can't read the QR code: paste the link shown under it on the computer.
@@ -341,6 +368,33 @@ class _ComputerPageState extends State<_ComputerPage> {
     final unique = {for (final c in toGet) c['id']: c}.values.toList();
     return ListView(children: [
       const SizedBox(height: 8),
+      if (Account.signedIn) ...[
+        Glass(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const DotLabel('Your computers (from anywhere)', color: T.text),
+              const Spacer(),
+              IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh, size: 18), onPressed: _findComputers),
+            ]),
+            if (computers == null) Text('Loading…', style: T.ui(12.5, FontWeight.w400, T.text2)),
+            for (final c in computers ?? const <RemoteComputer>[])
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.computer, color: c.online ? T.lilac : T.text3),
+                title: Text(c.name, style: T.ui(14, FontWeight.w600)),
+                subtitle: Text(c.online ? (Settings.current.connectedComputerId == c.id ? 'Connected' : 'Online') : 'Offline', style: T.ui(12, FontWeight.w400, T.text3)),
+                trailing: c.online && Settings.current.connectedComputerId != c.id
+                    ? TextButton(onPressed: () async {
+                        await AccountConnect.use(c);
+                        await _load();
+                      }, child: const Text('Connect'))
+                    : null,
+              ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+      ],
       Glass(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

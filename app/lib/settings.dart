@@ -21,6 +21,9 @@ class Settings {
   String? pairToken;
   String? desktopPairToken; // desktop: token phones must present
   bool onboarded = false;
+  String? accountToken, accountEmail, deviceId, connectedComputerId;
+  String accountName = '';
+  bool shareRemotely = false; // desktop: keep the tunnel up so phones can reach this computer anywhere
 
   static Settings current = Settings();
 
@@ -43,7 +46,13 @@ class Settings {
         ..pairedDesktop = j['pairedDesktop']
         ..pairToken = j['pairToken']
         ..desktopPairToken = j['desktopPairToken']
-        ..onboarded = j['onboarded'] ?? false;
+        ..onboarded = j['onboarded'] ?? false
+        ..accountToken = j['accountToken']
+        ..accountEmail = j['accountEmail']
+        ..accountName = j['accountName'] ?? ''
+        ..deviceId = j['deviceId']
+        ..connectedComputerId = j['connectedComputerId']
+        ..shareRemotely = j['shareRemotely'] ?? false;
     } catch (_) {
       current = Settings();
     }
@@ -68,6 +77,12 @@ class Settings {
           'pairToken': pairToken,
           'desktopPairToken': desktopPairToken,
           'onboarded': onboarded,
+          'accountToken': accountToken,
+          'accountEmail': accountEmail,
+          'accountName': accountName,
+          'deviceId': deviceId,
+          'connectedComputerId': connectedComputerId,
+          'shareRemotely': shareRemotely,
         }),
       );
 }

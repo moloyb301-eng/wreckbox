@@ -8,6 +8,9 @@ import 'config.dart';
 import 'paths.dart';
 import 'phone_sync.dart';
 import 'player.dart';
+import 'account.dart';
+import 'tunnel.dart';
+import 'ui/account_ui.dart';
 import 'services.dart';
 import 'settings.dart';
 import 'soulseek.dart';
@@ -55,6 +58,18 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
   late final phoneClient = PhoneSyncClient(widget.store);
   late final organiser = DownloadsOrganiser(widget.store);
   late final dropbox = Dropbox(widget.store);
+  late final tunnel = Tunnel(phoneServer);
+
+  /// Phone: refresh playlists from the account, find the computer's current address, learn what it can stream.
+  Future<void> _phoneStartup() async {
+    if (Account.signedIn) {
+      try {
+        await Account.downloadLibrary(widget.store);
+        await AccountConnect.reconnect();
+      } catch (_) {}
+    }
+    if (Settings.current.pairedDesktop != null) await phoneClient.crate().catchError((_) => <Map<String, dynamic>>[]);
+  }
   UpdateInfo? update;
 
   @override
@@ -66,8 +81,8 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
       soulseek.writeQueue();
     }
     Updates.check().then((u) => mounted ? setState(() => update = u) : null);
-    // Phone: learn which tracks the paired computer can stream (silently; fine if it's off).
-    if (Platform.isAndroid && Settings.current.pairedDesktop != null) phoneClient.crate().catchError((_) => <Map<String, dynamic>>[]);
+    if (Platform.isAndroid) _phoneStartup();
+    if (AppPaths.isDesktop && Settings.current.shareRemotely && Account.signedIn) tunnel.start();
   }
 
   @override
@@ -81,6 +96,7 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     soulseek.dispose_();
     phoneServer.stop();
+    tunnel.stop(keepWanted: Settings.current.shareRemotely);
     organiser.stop();
     super.dispose();
   }
@@ -97,7 +113,7 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
             ? PhoneShell(store: widget.store, organiser: organiser, dropbox: dropbox, client: phoneClient, update: update)
             : Scaffold(
                 backgroundColor: T.bg,
-                body: DesktopShell(store: widget.store, soulseek: soulseek, phoneServer: phoneServer, dropbox: dropbox, update: update),
+                body: DesktopShell(store: widget.store, soulseek: soulseek, phoneServer: phoneServer, dropbox: dropbox, tunnel: tunnel, update: update),
               ),
       ),
     );

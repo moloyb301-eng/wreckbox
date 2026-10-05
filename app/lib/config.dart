@@ -20,6 +20,9 @@ class AppConfig {
   /// Dropbox redirect for the phone app (registered in the user's Dropbox app).
   static const dropboxRedirect = 'wreckbox://dropbox-callback';
 
+  /// Account service (Cloudflare Worker, see api/).
+  static const accountApi = 'https://wreckbox-api.moloyb301.workers.dev';
+
   /// Port the desktop app serves the library to paired phones on.
   static const phoneSyncPort = 47390;
 }
