@@ -296,13 +296,13 @@ class InspectorBody extends StatelessWidget {
       Text(r.track.artist, style: T.ui(15, FontWeight.w400, T.text2)),
       Text([r.track.album, r.track.year].whereType<String>().join(' · '), style: T.ui(12, FontWeight.w400, T.text3)),
       const SizedBox(height: 14),
-      HRow(children: [
+      IntrinsicHeight(child: HRow(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         readout('BPM', BpmReadout(r.bpm, unsure: f?.bpmUnsure ?? false, size: 28), f?.bpmAlternate != null ? Text('or ${f!.bpmAlternate!.round()}', style: T.dot(11, T.text3)) : null),
         const SizedBox(width: 8),
         readout('Key', KeyBadge(r.camelot, unsure: f?.keyUnsure ?? false, large: true), Text(f?.key ?? ' ', style: T.ui(11, FontWeight.w400, T.text3))),
         const SizedBox(width: 8),
         readout('Energy', EnergyMeter(r.energy, height: 22), Text(r.energy == null ? '–' : '${(r.energy! * 100).round()}%', style: T.dot(11, T.text3))),
-      ]),
+      ])),
       const SizedBox(height: 8),
       Text(
         f == null
