@@ -4,6 +4,9 @@ import 'package:wreckbox/csv_import.dart';
 import 'package:wreckbox/paths.dart';
 import 'package:wreckbox/sources.dart';
 
+/// Tests that call live catalogues (MusicBrainz, Deezer, YouTube) only run when asked: WRECKBOX_NETWORK_TESTS=1.
+final networkTests = Platform.environment['WRECKBOX_NETWORK_TESTS'] == '1';
+
 void main() {
   test('CSV parser handles quotes, commas and newlines inside fields', () {
     final rows = CsvImport.parseCsv('a,b\n"x, y","say ""hi""\nthere"\r\n');
@@ -47,5 +50,5 @@ void main() {
     expect(all.where((t) => t.artworkURL != null).length, greaterThanOrEqualTo(2)); // live catalogues are sometimes busy
     final lib = await Sources.rebuild();
     expect(lib.tracks.length, 3);
-  }, timeout: const Timeout(Duration(minutes: 2)));
+  }, skip: !networkTests, timeout: const Timeout(Duration(minutes: 2)));
 }
