@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 
 import 'config.dart';
 import 'paths.dart';
 import 'phone_sync.dart';
+import 'player.dart';
 import 'services.dart';
 import 'settings.dart';
 import 'soulseek.dart';
@@ -25,8 +27,11 @@ void main() {
     };
     await AppPaths.init();
     await Settings.load();
+    // just_audio has native backends on Android / Mac; Windows plays through media_kit.
+    JustAudioMediaKit.ensureInitialized(windows: true, linux: true, android: false, iOS: false, macOS: false);
     final store = LibraryStore();
     await store.load();
+    Player.instance = Player(store);
     runApp(WreckBoxApp(store: store));
   }, (e, s) => _logError('$e', s));
 }
@@ -61,6 +66,8 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
       soulseek.writeQueue();
     }
     Updates.check().then((u) => mounted ? setState(() => update = u) : null);
+    // Phone: learn which tracks the paired computer can stream (silently; fine if it's off).
+    if (Platform.isAndroid && Settings.current.pairedDesktop != null) phoneClient.crate().catchError((_) => <Map<String, dynamic>>[]);
   }
 
   @override

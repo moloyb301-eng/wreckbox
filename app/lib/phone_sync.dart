@@ -18,6 +18,7 @@ import 'package:shelf_router/shelf_router.dart';
 
 import 'config.dart';
 import 'models.dart';
+import 'player.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -72,7 +73,7 @@ class PhoneSyncServer {
       ..get('/info', (Request _) => _json({'name': 'WreckBox on ${Platform.localHostname}', 'tracks': store.count(TrackStatus.downloaded)}))
       ..get('/library.json', (Request _) async => Response.ok(await AppPaths.libraryFile.readAsString(), headers: {'content-type': 'application/json'}))
       ..get('/crate', (Request _) => _json(_crate()))
-      ..get('/file/<id>', (Request req, String id) => _file(Uri.decodeComponent(id)))
+      ..get('/file/<id>', (Request req, String id) => _file(Uri.decodeComponent(id), req.headers['range']))
       ..get('/art/<id>', (Request req, String id) async {
         final t = store.track(Uri.decodeComponent(id));
         final f = t == null ? null : await store.ensureArtwork(t);
@@ -111,12 +112,39 @@ class PhoneSyncServer {
     return out;
   }
 
-  Future<Response> _file(String id) async {
+  /// Serves a track; honours "Range: bytes=a-b" so the phone's player can seek while streaming.
+  Future<Response> _file(String id, String? range) async {
     final path = store.state.tracks[id]?.localPath;
     if (path == null || !await File(path).exists()) return Response.notFound('no such track');
     final f = File(path);
-    return Response.ok(f.openRead(), headers: {'content-type': 'application/octet-stream', 'content-length': '${await f.length()}'});
+    final len = await f.length();
+    final type = _mime(path);
+    final m = range == null ? null : RegExp(r'bytes=(\d*)-(\d*)').firstMatch(range);
+    if (m != null && (m.group(1)!.isNotEmpty || m.group(2)!.isNotEmpty)) {
+      var start = int.tryParse(m.group(1)!) ?? (len - (int.tryParse(m.group(2)!) ?? 0));
+      var end = m.group(1)!.isEmpty ? len - 1 : (int.tryParse(m.group(2)!) ?? len - 1);
+      if (end >= len) end = len - 1;
+      if (start < 0) start = 0;
+      if (start > end) return Response(416, headers: {'content-range': 'bytes */$len'});
+      return Response(206, body: f.openRead(start, end + 1), headers: {
+        'content-type': type,
+        'content-length': '${end - start + 1}',
+        'content-range': 'bytes $start-$end/$len',
+        'accept-ranges': 'bytes',
+      });
+    }
+    return Response.ok(f.openRead(), headers: {'content-type': type, 'content-length': '$len', 'accept-ranges': 'bytes'});
   }
+
+  static String _mime(String path) => switch (p.extension(path).toLowerCase()) {
+        '.flac' => 'audio/flac',
+        '.mp3' => 'audio/mpeg',
+        '.m4a' || '.aac' || '.alac' => 'audio/mp4',
+        '.wav' => 'audio/wav',
+        '.aif' || '.aiff' => 'audio/aiff',
+        '.ogg' || '.opus' => 'audio/ogg',
+        _ => 'application/octet-stream',
+      };
 }
 
 /// Phone side.
@@ -168,7 +196,9 @@ class PhoneSyncClient {
   Future<List<Map<String, dynamic>>> crate() async {
     final r = await http.get(Uri.parse('$base/crate'), headers: _headers).timeout(const Duration(seconds: 15));
     if (r.statusCode != 200) throw Exception('computer said ${r.statusCode}');
-    return List<Map<String, dynamic>>.from(jsonDecode(r.body));
+    final list = List<Map<String, dynamic>>.from(jsonDecode(r.body));
+    Player.instance.remoteIds = {for (final c in list) c['id'] as String}; // these can stream to the phone
+    return list;
   }
 
   /// Downloads `items` (from crate()) the phone doesn't have yet. `progress(done, total, name)`.

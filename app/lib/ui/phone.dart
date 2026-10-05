@@ -16,6 +16,7 @@ import '../services.dart';
 import '../settings.dart';
 import '../store.dart';
 import 'bug_report.dart';
+import 'player_bar.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'tracks.dart';
@@ -109,7 +110,9 @@ class _PhoneShellState extends State<PhoneShell> {
             Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _page())),
           ]),
         ),
-        bottomNavigationBar: NavigationBar(
+        bottomNavigationBar: Column(mainAxisSize: MainAxisSize.min, children: [
+          PlayerBar(store: widget.store, compact: true),
+          NavigationBar(
           backgroundColor: T.bgRaised,
           indicatorColor: T.lilac.withValues(alpha: 0.25),
           selectedIndex: tab,
@@ -121,6 +124,7 @@ class _PhoneShellState extends State<PhoneShell> {
             NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
           ],
         ),
+        ]),
       ),
     );
   }
@@ -131,7 +135,7 @@ class _PhoneShellState extends State<PhoneShell> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text('No library yet. Import your Spotify playlists in Settings, or pair with your computer to use its library.',
+          child: Text('No library yet. Import your playlists (CSV) in Settings, or pair with your computer to use its library.',
               textAlign: TextAlign.center, style: T.ui(14, FontWeight.w400, T.text2)),
         ),
       );

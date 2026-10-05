@@ -7,7 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:file_picker/file_picker.dart';
+
 import '../config.dart';
+import '../csv_import.dart';
 import '../engine.dart';
 import '../paths.dart';
 import '../services.dart';
@@ -132,7 +135,53 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 6),
       Text('Setup', style: T.ui(32, FontWeight.w500)),
       const SizedBox(height: 18),
-      section('Spotify', smart: s.spotifyClientId.isEmpty, [
+      section('Import playlists', smart: widget.store.library == null, [
+        Text('Bring in your Spotify and YouTube playlists as CSV files — no accounts or developer keys needed. Re-import any time; a playlist with the same name is replaced.',
+            style: T.ui(13, FontWeight.w400, T.text2)),
+        const SizedBox(height: 12),
+        step(1, 'Spotify: open exportify.net, log in with Spotify, click "Export All" (or export single playlists). You get one CSV per playlist.'),
+        step(2, 'YouTube / YouTube Music: takeout.google.com → deselect all → tick "YouTube and YouTube Music" → choose only "playlists" → export. Or use tunemymusic.com → your service → "Export to file" (CSV).'),
+        step(3, 'Click Choose CSV files and select them all at once.'),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          PillButton(label: 'Open Exportify', icon: Icons.open_in_new, onTap: () => launchUrl(Uri.parse('https://exportify.net'), mode: LaunchMode.externalApplication)),
+          PillButton(label: 'Open Google Takeout', icon: Icons.open_in_new, onTap: () => launchUrl(Uri.parse('https://takeout.google.com'), mode: LaunchMode.externalApplication)),
+          PillButton(label: 'Open TuneMyMusic', icon: Icons.open_in_new, onTap: () => launchUrl(Uri.parse('https://www.tunemymusic.com'), mode: LaunchMode.externalApplication)),
+        ]),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          PillButton(
+            label: importing ? 'Importing…' : 'Choose CSV files',
+            icon: Icons.upload_file,
+            style: PillStyle.primary,
+            onTap: importing
+                ? null
+                : () async {
+                    final files = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
+                    final paths = [for (final f in files) if (f.path != null) f.path!];
+                    if (paths.isEmpty) return;
+                    setState(() => importing = true);
+                    try {
+                      await CsvImport.run(paths, (line) => setState(() => status = line));
+                      await widget.store.load();
+                      s.onboarded = true;
+                      await s.save();
+                    } catch (e) {
+                      setState(() => status = 'Import failed: $e');
+                    } finally {
+                      setState(() => importing = false);
+                    }
+                  },
+          ),
+          if (status.isNotEmpty) Text(status, style: T.ui(12.5, FontWeight.w400, T.text2)),
+        ]),
+        const SizedBox(height: 6),
+        Text('Each song is looked up in free music catalogues (MusicBrainz, Deezer) for its ISRC and cover. The first import of a big library takes a while — about one song per second.',
+            style: T.ui(11.5, FontWeight.w400, T.text3)),
+      ]),
+      section('Spotify — direct (optional, needs Spotify Premium)', [
+        Text('Advanced: import straight from your Spotify account instead of CSV. Spotify requires the key\'s owner to have Premium; one key can be shared with up to 5 people (add their Spotify emails under the app\'s "User Management").',
+            style: T.ui(12.5, FontWeight.w400, T.text3)),
+        const SizedBox(height: 10),
         Text('Spotify only lets each developer app have a few users, so everyone uses their own free key. It takes about two minutes:',
             style: T.ui(13, FontWeight.w400, T.text2)),
         const SizedBox(height: 12),
@@ -151,7 +200,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (status.isNotEmpty) Text(status, style: T.ui(12.5, FontWeight.w400, T.text2)),
         ]),
       ]),
-      section('YouTube (optional)', [
+      section('YouTube — direct (optional)', [
         Text('Bring in your YouTube and YouTube Music playlists and liked music. Songs that are also on Spotify merge into one entry. This imports the playlists only — not audio.',
             style: T.ui(13, FontWeight.w400, T.text2)),
         const SizedBox(height: 12),

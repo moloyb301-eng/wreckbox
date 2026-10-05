@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' as m show Row;
 
 import '../matcher.dart';
 import '../models.dart';
+import '../player.dart';
 import '../store.dart';
 import 'theme.dart';
 
@@ -75,12 +76,14 @@ class _TrackListViewState extends State<TrackListView> {
             Expanded(
               child: rows.isEmpty
                   ? Center(child: Text(search.isEmpty && !mix.active ? 'Nothing here yet.' : 'No tracks match.', style: T.ui(13, FontWeight.w400, T.text3)))
-                  : ListView.builder(
+                  : ListenableBuilder(
+                      listenable: Player.instance, // now-playing marker
+                      builder: (context, _) => ListView.builder(
                       padding: const EdgeInsets.all(6),
                       itemCount: rows.length,
                       itemExtent: widget.compact ? 60 : 54,
-                      itemBuilder: (_, i) => _TrackTile(row: rows[i], store: store, compact: widget.compact),
-                    ),
+                      itemBuilder: (_, i) => _TrackTile(row: rows[i], store: store, compact: widget.compact, queue: [for (final r in rows) r.id]),
+                    )),
             ),
           ]),
         ),
@@ -191,7 +194,8 @@ class _TrackTile extends StatelessWidget {
   final TrackRow row;
   final LibraryStore store;
   final bool compact;
-  const _TrackTile({required this.row, required this.store, required this.compact});
+  final List<String> queue; // the list on screen: next / previous in the player follow it
+  const _TrackTile({required this.row, required this.store, required this.compact, required this.queue});
 
   @override
   Widget build(BuildContext context) {
@@ -207,7 +211,23 @@ class _TrackTile extends StatelessWidget {
           border: focused ? Border.all(color: T.lilac.withValues(alpha: 0.6)) : null,
         ),
         child: HRow(children: [
-          Artwork(track: row.track, store: store, size: compact ? 44 : 40),
+          // Tap the cover to play (own files, or streamed from your computer on the phone).
+          Tooltip(
+            message: Player.instance.canPlay(row.id) ? 'Play' : 'Not on this device',
+            child: InkWell(
+              onTap: Player.instance.canPlay(row.id) ? () => Player.instance.play(row.id, list: queue) : null,
+              child: Stack(alignment: Alignment.center, children: [
+                Artwork(track: row.track, store: store, size: compact ? 44 : 40),
+                if (Player.instance.currentId == row.id)
+                  Container(
+                    width: compact ? 44 : 40,
+                    height: compact ? 44 : 40,
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(8)),
+                    child: Icon(Player.instance.playing ? Icons.graphic_eq : Icons.pause, color: T.lilac, size: 20),
+                  ),
+              ]),
+            ),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -221,7 +241,9 @@ class _TrackTile extends StatelessWidget {
           if (!compact) SizedBox(width: 60, child: EnergyMeter(row.energy)),
           if (!compact) SizedBox(width: 50, child: Text(row.durationText, textAlign: TextAlign.right, style: T.dot(12, T.text3))),
           const SizedBox(width: 10),
-          StatusDot(row.status),
+          row.status == TrackStatus.missing && Player.instance.remoteIds.contains(row.id)
+              ? const Tooltip(message: 'On your computer — tap the cover to stream', child: Icon(Icons.wifi, size: 16, color: T.lilac))
+              : StatusDot(row.status),
         ]),
       ),
     );
@@ -349,6 +371,13 @@ class InspectorBody extends StatelessWidget {
       ),
       const SizedBox(height: 14),
       Wrap(spacing: 8, runSpacing: 8, children: [
+        if (Player.instance.canPlay(r.id))
+          PillButton(
+            label: Player.instance.isRemote(r.id) ? 'Stream from computer' : 'Play',
+            icon: Icons.play_arrow_rounded,
+            style: PillStyle.primary,
+            onTap: () => Player.instance.play(r.id),
+          ),
         if (r.status == TrackStatus.downloaded && r.state?.localPath != null) ...[
           PillButton(label: 'Write tags to file', icon: Icons.sell_outlined, style: PillStyle.smart, onTap: store.busy != null ? null : () => store.writeTags([r.id])),
           if (Platform.isWindows || Platform.isMacOS)

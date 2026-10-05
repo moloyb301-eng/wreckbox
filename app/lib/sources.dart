@@ -75,6 +75,14 @@ class SourcePlaylist {
 class Sources {
   static Directory get dir => Directory(p.join(AppPaths.root.path, '_sources'));
 
+  /// Playlists previously saved by one importer (empty if none).
+  static Future<List<SourcePlaylist>> load(String kind) async {
+    final f = File(p.join(dir.path, '$kind.json'));
+    if (!await f.exists()) return [];
+    final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+    return [for (final pl in (j['playlists'] as List? ?? const [])) SourcePlaylist.fromJson(Map<String, dynamic>.from(pl))];
+  }
+
   /// Saves one importer's playlists and rebuilds library.json from every source.
   static Future<Library> save(String kind, String user, List<SourcePlaylist> playlists) async {
     await _preserveLegacy(kind);

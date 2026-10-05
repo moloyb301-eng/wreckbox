@@ -19,6 +19,7 @@ import 'package:wreckbox/store.dart';
 import 'package:wreckbox/ui/desktop.dart';
 import 'package:wreckbox/ui/theme.dart';
 import 'package:wreckbox/phone_sync.dart';
+import 'package:wreckbox/player.dart';
 import 'package:wreckbox/services.dart';
 import 'package:wreckbox/soulseek.dart';
 import 'package:wreckbox/sources.dart';
@@ -167,6 +168,7 @@ void main() {
     final store = LibraryStore();
     await tester.runAsync(store.load);
     Settings.current = Settings();
+    Player.instance = Player(store);
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1;
     await tester.pumpWidget(MaterialApp(

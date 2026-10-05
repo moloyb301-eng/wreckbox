@@ -11,6 +11,7 @@ import '../services.dart';
 import '../soulseek.dart';
 import '../store.dart';
 import 'bug_report.dart';
+import 'player_bar.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'tracks.dart';
@@ -42,7 +43,12 @@ class _DesktopShellState extends State<DesktopShell> {
           const Positioned.fill(child: _Ambient()),
           Row(children: [
             SizedBox(width: 252, child: _sidebar()),
-            Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(22, 0, 22, 10), child: _page())),
+            Expanded(
+              child: Column(children: [
+                Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(22, 0, 22, 10), child: _page())),
+                Padding(padding: const EdgeInsets.only(left: 22), child: PlayerBar(store: store)),
+              ]),
+            ),
             if (showInspector && !overlay) SizedBox(width: 340, child: Inspector(store: store)),
           ]),
           if (showInspector && overlay) Positioned(right: 0, top: 0, bottom: 0, width: 340, child: Inspector(store: store, floating: true)),
@@ -164,7 +170,7 @@ class _DesktopShellState extends State<DesktopShell> {
           const SizedBox(height: 18),
           Text('Welcome to WreckBox', style: T.ui(28, FontWeight.w500)),
           const SizedBox(height: 8),
-          Text('Start by connecting your Spotify playlists.', style: T.ui(14, FontWeight.w400, T.text2)),
+          Text('Start by importing your Spotify and YouTube playlists (CSV files).', style: T.ui(14, FontWeight.w400, T.text2)),
           const SizedBox(height: 18),
           PillButton(label: 'Set up', icon: Icons.arrow_forward, style: PillStyle.primary, onTap: () => setState(() => page = 'settings')),
         ]),
