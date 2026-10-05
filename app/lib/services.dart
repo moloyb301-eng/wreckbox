@@ -64,7 +64,7 @@ class DownloadsOrganiser {
     }
     for (final f in files) {
       final key = '${f.path}|${await f.length()}';
-      if (_seen.contains(key)) continue;
+      if (_seen.contains(key) || _seen.contains('$key|${store.library?.builtAt.toIso8601String()}')) continue;
       // Skip files still being written (size changing).
       final size1 = await f.length();
       await Future.delayed(const Duration(milliseconds: 600));
@@ -73,7 +73,9 @@ class DownloadsOrganiser {
       recent.insert(0, msg);
       if (recent.length > 50) recent.removeLast();
       if (msg.startsWith('Added')) filed++;
-      _seen.add(key);
+      // A file that isn't in the library yet is retried after the next playlist import (key includes the
+      // library's build time); anything else is handled once.
+      _seen.add(msg.startsWith('Not in your library') ? '$key|${store.library?.builtAt.toIso8601String()}' : key);
     }
     await writeAtomic(_seenFile, jsonEncode(_seen.toList()));
     return filed;

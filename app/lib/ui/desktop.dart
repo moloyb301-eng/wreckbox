@@ -36,7 +36,7 @@ class _DesktopShellState extends State<DesktopShell> {
       listenable: Listenable.merge([store, widget.soulseek]),
       builder: (context, _) => LayoutBuilder(builder: (context, c) {
         final overlay = c.maxWidth < 1320;
-        final showInspector = store.focus != null && !{'settings', 'soulseek', 'phone'}.contains(page);
+        final showInspector = store.focus != null && !{'settings', 'soulseek', 'phone', 'queue'}.contains(page);
         return Stack(children: [
           const Positioned.fill(child: _Ambient()),
           Row(children: [
@@ -110,6 +110,7 @@ class _DesktopShellState extends State<DesktopShell> {
               for (final p in store.library?.playlists ?? const <LibraryPlaylist>[])
                 item('playlist', p.name, p.collaborative ? Icons.people_outline : Icons.music_note, count: p.trackIDs.length, pl: p.name),
               section('Tools'),
+              item('queue', 'Download queue', Icons.format_list_numbered, count: store.state.downloadPriority.isEmpty ? null : store.state.downloadPriority.length),
               item('soulseek', 'Soulseek sync', Icons.download_for_offline_outlined, live: widget.soulseek.running,
                   count: widget.soulseek.notFound + widget.soulseek.failed == 0 ? null : widget.soulseek.notFound + widget.soulseek.failed),
               item('phone', 'Sync to phone', Icons.smartphone, live: widget.phoneServer.running),
@@ -175,6 +176,8 @@ class _DesktopShellState extends State<DesktopShell> {
         return _SoulseekPage(soulseek: widget.soulseek, store: store, header: header);
       case 'phone':
         return _PhonePage(server: widget.phoneServer, header: header);
+      case 'queue':
+        return _QueuePage(store: store, soulseek: widget.soulseek, header: header);
       case 'home':
         return _home();
       default:
@@ -493,3 +496,82 @@ class _PhonePageState extends State<_PhonePage> {
     ]);
   }
 }
+
+/// Download queue: playlists in priority order decide which missing tracks Soulseek fetches first
+/// (same queue.json format as the Mac app).
+class _QueuePage extends StatefulWidget {
+  final LibraryStore store;
+  final Soulseek soulseek;
+  final Widget Function(String, String, String, [List<Widget>]) header;
+  const _QueuePage({required this.store, required this.soulseek, required this.header});
+  @override
+  State<_QueuePage> createState() => _QueuePageState();
+}
+
+class _QueuePageState extends State<_QueuePage> {
+  List<String> get prios => widget.store.state.downloadPriority;
+
+  Future<void> _set(List<String> p, {bool? only}) async {
+    widget.store.state.downloadPriority = p;
+    if (only != null) widget.store.state.priorityOnly = only;
+    widget.store.log('queue', p.isEmpty ? 'priorities cleared' : 'priorities: ${p.map((k) => k.substring(k.indexOf(':') + 1)).join(' → ')}');
+    await widget.store.save();
+    await widget.soulseek.writeQueue();
+    widget.store.changed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lib = widget.store.library;
+    final missing = {for (final t in lib?.tracks ?? const <LibraryTrack>[]) if ((widget.store.state.tracks[t.id]?.status ?? TrackStatus.missing) == TrackStatus.missing) t.id};
+    int missingIn(String name) => lib?.playlists.where((x) => x.name == name).firstOrNull?.trackIDs.where(missing.contains).toSet().length ?? 0;
+    final available = [for (final pl in lib?.playlists ?? const <LibraryPlaylist>[]) if (!prios.contains('playlist:${pl.name}')) pl.name];
+    return ListView(children: [
+      widget.header('Tools', 'Download queue', 'Soulseek downloads missing tracks in this order'),
+      Glass(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const DotLabel('Priority', color: T.text),
+          const SizedBox(height: 10),
+          if (prios.isEmpty) Text('Add playlists below. Their missing tracks go to the front of the queue, top to bottom.', style: T.ui(13, FontWeight.w400, T.text2)),
+          for (var i = 0; i < prios.length; i++)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(color: T.glassFill, borderRadius: BorderRadius.circular(12)),
+              child: Row(children: [
+                SizedBox(width: 26, child: Text('${i + 1}', style: T.dot(16, T.lilac))),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(prios[i].substring(prios[i].indexOf(':') + 1), style: T.ui(13.5, FontWeight.w600)),
+                    Text('${missingIn(prios[i].substring(prios[i].indexOf(':') + 1))} missing', style: T.ui(11, FontWeight.w400, T.text3)),
+                  ]),
+                ),
+                IconButton(icon: const Icon(Icons.arrow_upward, size: 16), onPressed: i == 0 ? null : () => _set([...prios]..insert(i - 1, prios[i])..removeAt(i + 1))),
+                IconButton(icon: const Icon(Icons.arrow_downward, size: 16), onPressed: i == prios.length - 1 ? null : () => _set([...prios]..insert(i + 2, prios[i])..removeAt(i))),
+                IconButton(icon: const Icon(Icons.close, size: 16), onPressed: () => _set([...prios]..removeAt(i))),
+              ]),
+            ),
+          const SizedBox(height: 8),
+          PopupMenuButton<String>(
+            color: T.bgRaised,
+            onSelected: (name) => _set([...prios, 'playlist:$name']),
+            itemBuilder: (_) => [for (final n in available) PopupMenuItem(value: n, child: Text(n))],
+            child: const IgnorePointer(child: PillButton(label: 'Add playlist', icon: Icons.add, onTap: _noop)),
+          ),
+          const Divider(height: 28, color: T.hairline),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: !widget.store.state.priorityOnly,
+            activeThumbColor: T.lilac,
+            title: Text('Then everything else', style: T.ui(13.5, FontWeight.w600)),
+            subtitle: Text('Off: download only your priorities', style: T.ui(11.5, FontWeight.w400, T.text3)),
+            onChanged: (v) => _set(prios, only: !v),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+void _noop() {}

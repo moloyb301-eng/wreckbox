@@ -15,7 +15,7 @@ val keyProps = Properties().apply {
 
 android {
     namespace = "local.wreckbox.wreckbox"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -15,19 +15,20 @@ import 'ui/desktop.dart';
 import 'ui/phone.dart';
 import 'ui/theme.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await AppPaths.init();
-  await Settings.load();
-  final store = LibraryStore();
-  await store.load();
-
-  // Unexpected errors go to a log file that bug reports can include.
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    _logError(details.exceptionAsString(), details.stack);
-  };
-  runZonedGuarded(() => runApp(WreckBoxApp(store: store)), (e, s) => _logError('$e', s));
+void main() {
+  // Everything runs inside the zone so unexpected errors anywhere go to the log that bug reports include.
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+      _logError(details.exceptionAsString(), details.stack);
+    };
+    await AppPaths.init();
+    await Settings.load();
+    final store = LibraryStore();
+    await store.load();
+    runApp(WreckBoxApp(store: store));
+  }, (e, s) => _logError('$e', s));
 }
 
 void _logError(String error, StackTrace? stack) {
