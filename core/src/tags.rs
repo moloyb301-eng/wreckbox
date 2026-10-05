@@ -86,7 +86,11 @@ fn apply(tag: &mut Tag, t: &TrackTags, cover: Option<Vec<u8>>) {
     set_text(tag, ItemKey::RecordingDate, &t.year);
     set_text(tag, ItemKey::Genre, &t.genre);
     if let Some(b) = t.bpm.filter(|b| *b > 0.0) {
-        tag.insert_text(ItemKey::Bpm, format!("{}", b.round() as i64));
+        // ID3 TBPM and MP4 tmpo are the "integer BPM" item; Vorbis BPM is the plain one. A tag type
+        // silently ignores the key it doesn't support, so set both.
+        let v = format!("{}", b.round() as i64);
+        tag.insert_text(ItemKey::IntegerBpm, v.clone());
+        tag.insert_text(ItemKey::Bpm, v);
     }
     if let Some(k) = t.key.as_ref().filter(|k| !k.is_empty()) {
         tag.insert_text(ItemKey::InitialKey, short_key(k));
@@ -97,6 +101,21 @@ fn apply(tag: &mut Tag, t: &TrackTags, cover: Option<Vec<u8>>) {
         tag.remove_picture_type(PictureType::CoverFront);
         tag.push_picture(Picture::new_unchecked(PictureType::CoverFront, Some(mime), Some("Cover".into()), data));
     }
+}
+
+fn set_mp4_tempo(path: &Path, bpm: i32) -> Result<()> {
+    use lofty::mp4::{Atom, AtomData, AtomIdent, Mp4File};
+    use lofty::prelude::AudioFile;
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut mp4 = Mp4File::read_from(&mut file, lofty::config::ParseOptions::new())?;
+    let ilst = match mp4.ilst_mut() {
+        Some(i) => i,
+        None => return Ok(()),
+    };
+    ilst.replace_atom(Atom::new(AtomIdent::Fourcc(*b"tmpo"), AtomData::SignedInteger(bpm)));
+    drop(file);
+    mp4.save_to_path(path, WriteOptions::default())?;
+    Ok(())
 }
 
 /// Writes `t` into the file at `path` (atomically, via a temporary copy in the same folder).
@@ -118,6 +137,12 @@ pub fn write(path: &Path, t: &TrackTags) -> Result<()> {
         let tag = tagged.tag_mut(tag_type).ok_or_else(|| anyhow!("can't create a tag"))?;
         apply(tag, t, cover);
         tag.save_to_path(&tmp, WriteOptions::default().use_id3v23(true))?;
+        // MP4 stores BPM as a binary integer atom (tmpo), which the generic tag can't express.
+        if tag_type == TagType::Mp4Ilst {
+            if let Some(b) = t.bpm.filter(|b| *b > 0.0) {
+                set_mp4_tempo(&tmp, b.round() as i32)?;
+            }
+        }
         // Make sure the result still opens as audio before replacing the original.
         Probe::open(&tmp)?.read().context("file unreadable after tagging")?;
         Ok(())
