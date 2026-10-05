@@ -3,7 +3,8 @@
 ## One-time setup
 
 1. **Repos**
-   - `wreckbox` (private): this code. Issues from bug reports land here.
+   - `wreckbox` (public): this code.
+   - `wreckbox-bugs` (private): bug reports from the apps (issues + screenshots), so friends' details stay private.
    - `wreckbox-releases` (public): only release files. The apps check its latest release for updates.
 2. **App config** — `app/lib/config.dart`: set `releasesRepo`, `bugRelayUrl`, `bugRelayKey`.
 3. **GitHub Actions secrets / variables** (private repo → Settings → Secrets and variables → Actions):
@@ -15,8 +16,8 @@
    ```sh
    cd relay
    npx wrangler login
-   # set GITHUB_REPO in wrangler.toml to yourname/wreckbox
-   npx wrangler secret put GITHUB_TOKEN   # fine-grained token, repo wreckbox: Issues + Contents read & write
+   # set GITHUB_REPO in wrangler.toml to yourname/wreckbox-bugs
+   npx wrangler secret put GITHUB_TOKEN   # fine-grained token, repo wreckbox-bugs: Issues + Contents read & write
    npx wrangler secret put APP_KEY        # any random string; same value as bugRelayKey in config.dart
    npx wrangler deploy                    # prints https://wreckbox-bug-relay.<you>.workers.dev
    ```

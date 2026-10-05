@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2026-01-01"
 
 [vars]
-GITHUB_REPO = "moloyb301-eng/wreckbox"
+GITHUB_REPO = "moloyb301-eng/wreckbox-bugs"
 
 # Per-IP rate limiting (10 reports / hour).
 [[kv_namespaces]]
