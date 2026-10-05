@@ -52,14 +52,17 @@ class _PhoneShellState extends State<PhoneShell> {
     }
   }
 
+  // Built inside the ListenableBuilder so every store change (e.g. a track filed in the background)
+  // reaches the screen — building these once outside it left the library showing stale counts.
+  Widget _page() => switch (tab) {
+        0 => _library(),
+        1 => _OrganisePage(store: widget.store, organiser: widget.organiser, dropbox: widget.dropbox),
+        2 => _ComputerPage(store: widget.store, client: widget.client),
+        _ => SettingsPage(store: widget.store, dropbox: widget.dropbox),
+      };
+
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      _library(),
-      _OrganisePage(store: widget.store, organiser: widget.organiser, dropbox: widget.dropbox),
-      _ComputerPage(store: widget.store, client: widget.client),
-      SettingsPage(store: widget.store, dropbox: widget.dropbox),
-    ];
     return ListenableBuilder(
       listenable: widget.store,
       builder: (context, _) => Scaffold(
@@ -103,7 +106,7 @@ class _PhoneShellState extends State<PhoneShell> {
                   ]),
                 ),
               ),
-            Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: pages[tab])),
+            Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _page())),
           ]),
         ),
         bottomNavigationBar: NavigationBar(
