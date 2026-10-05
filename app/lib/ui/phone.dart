@@ -271,6 +271,36 @@ class _ComputerPageState extends State<_ComputerPage> {
     if (Settings.current.pairedDesktop != null) _load();
   }
 
+  /// Fallback when the camera can't read the QR code: paste the link shown under it on the computer.
+  Future<void> _enterLink() async {
+    final c = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: T.bgRaised,
+        title: Text('Pairing link', style: T.ui(18, FontWeight.w600)),
+        content: TextField(controller: c, autofocus: true, style: T.ui(13), decoration: const InputDecoration(hintText: 'wreckbox://pair?…')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('Pair')),
+        ],
+      ),
+    );
+    if (raw == null || raw.isEmpty) return;
+    final info = PhoneSyncClient.parsePairing(raw);
+    if (info == null) {
+      setState(() => status = "That doesn't look like a WreckBox pairing link.");
+      return;
+    }
+    setState(() => status = 'Pairing…');
+    final base = await PhoneSyncClient.pair(info);
+    if (base == null) {
+      setState(() => status = "Couldn't reach the computer — same Wi-Fi? Is sharing on?");
+    } else {
+      await _load();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (scanning) {
@@ -316,6 +346,7 @@ class _ComputerPageState extends State<_ComputerPage> {
           const SizedBox(height: 10),
           Wrap(spacing: 8, children: [
             PillButton(label: Settings.current.pairedDesktop == null ? 'Scan pairing code' : 'Pair again', icon: Icons.qr_code_scanner, style: PillStyle.primary, onTap: () => setState(() => scanning = true)),
+            PillButton(label: 'Enter pairing link', icon: Icons.link, onTap: _enterLink),
             if (Settings.current.pairedDesktop != null) PillButton(label: 'Refresh', icon: Icons.refresh, onTap: _load),
           ]),
         ]),
@@ -324,16 +355,7 @@ class _ComputerPageState extends State<_ComputerPage> {
         const SizedBox(height: 12),
         const DotLabel('Pick playlists to bring to the phone'),
         const SizedBox(height: 8),
-        for (final pl in lib.playlists)
-          CheckboxListTile(
-            value: picked.contains(pl.name),
-            activeColor: T.lilac,
-            onChanged: (v) => setState(() => v == true ? picked.add(pl.name) : picked.remove(pl.name)),
-            title: Text(pl.name, style: T.ui(14, FontWeight.w600)),
-            subtitle: Text('${pl.trackIDs.where(available.containsKey).length} on the computer · ${pl.trackIDs.where(have.contains).length} already here',
-                style: T.ui(12, FontWeight.w400, T.text3)),
-          ),
-        const SizedBox(height: 8),
+        // The button sits above the list so it's reachable without scrolling past every playlist.
         PillButton(
           label: working ? 'Downloading…' : 'Download ${unique.length} tracks',
           icon: Icons.download,
@@ -349,6 +371,17 @@ class _ComputerPageState extends State<_ComputerPage> {
                   });
                 },
         ),
+        const SizedBox(height: 8),
+        // Playlists with tracks waiting on the computer first.
+        for (final pl in [...lib.playlists]..sort((a, b) => b.trackIDs.where(available.containsKey).length.compareTo(a.trackIDs.where(available.containsKey).length)))
+          CheckboxListTile(
+            value: picked.contains(pl.name),
+            activeColor: T.lilac,
+            onChanged: (v) => setState(() => v == true ? picked.add(pl.name) : picked.remove(pl.name)),
+            title: Text(pl.name, style: T.ui(14, FontWeight.w600)),
+            subtitle: Text('${pl.trackIDs.where(available.containsKey).length} on the computer · ${pl.trackIDs.where(have.contains).length} already here',
+                style: T.ui(12, FontWeight.w400, T.text3)),
+          ),
       ],
     ]);
   }

@@ -1,6 +1,7 @@
 // Desktop layout (Windows, later Mac): sidebar | page | inspector.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -483,6 +484,15 @@ class _PhonePageState extends State<_PhonePage> {
               ])
                 Padding(padding: const EdgeInsets.only(bottom: 8), child: Row(children: [Text('$n', style: T.dot(15, T.lilac)), const SizedBox(width: 10), Expanded(child: Text(s, style: T.ui(13, FontWeight.w400, T.text2)))])),
               const SizedBox(height: 10),
+              if (uri != null && on) ...[
+                Text('Camera won\'t read it? On the phone tap "Enter pairing link" and paste:', style: T.ui(12, FontWeight.w400, T.text2)),
+                const SizedBox(height: 4),
+                Row(children: [
+                  Expanded(child: SelectableText(uri!, style: T.ui(11.5, FontWeight.w400, T.text3))),
+                  IconButton(tooltip: 'Copy', icon: const Icon(Icons.copy, size: 16), onPressed: () => Clipboard.setData(ClipboardData(text: uri!))),
+                ]),
+                const SizedBox(height: 10),
+              ],
               Text('Only phones that scanned this code can connect. Windows may ask to allow WreckBox on private networks — allow it.', style: T.ui(12, FontWeight.w400, T.text3)),
               const SizedBox(height: 12),
               PillButton(label: 'Unpair all phones', icon: Icons.link_off, onTap: () async {
