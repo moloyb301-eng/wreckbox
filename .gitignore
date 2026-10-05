@@ -1,0 +1,14 @@
+core/target/
+app/build/
+app/.dart_tool/
+app/.flutter-plugins*
+app/android/.gradle/
+app/android/local.properties
+app/android/app/src/main/jniLibs/
+app/windows/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+*.iml
+.DS_Store
+relay/.wrangler/
+dist/
+secrets/

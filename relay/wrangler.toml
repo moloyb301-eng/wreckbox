@@ -1,0 +1,11 @@
+name = "wreckbox-bug-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+GITHUB_REPO = "OWNER/wreckbox"   # set to your GitHub username / repo
+
+# Optional per-IP rate limiting: create a KV namespace and paste its id.
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = ""
