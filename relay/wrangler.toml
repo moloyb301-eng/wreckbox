@@ -3,9 +3,9 @@ main = "worker.js"
 compatibility_date = "2026-01-01"
 
 [vars]
-GITHUB_REPO = "moloyb301-eng/wreckbox"   # set to your GitHub username / repo
+GITHUB_REPO = "moloyb301-eng/wreckbox"
 
-# Optional per-IP rate limiting: create a KV namespace and paste its id.
-# [[kv_namespaces]]
-# binding = "RATE_LIMIT"
-# id = ""
+# Per-IP rate limiting (10 reports / hour).
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "b147649cf2474a13b9f8897fec35d27d"

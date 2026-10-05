@@ -7,10 +7,10 @@ class AppConfig {
   static const releasesRepo = 'moloyb301-eng/wreckbox-releases';
 
   /// Bug-report relay (Cloudflare Worker, see relay/README.md). SET-BEFORE-RELEASE.
-  static const bugRelayUrl = 'https://wreckbox-bug-relay.OWNER.workers.dev';
+  static const bugRelayUrl = 'https://wreckbox-bug-relay.moloyb301.workers.dev';
 
   /// Shared key the relay expects in X-WreckBox-Key (deters casual spam; not a secret). SET-BEFORE-RELEASE.
-  static const bugRelayKey = 'CHANGE-ME';
+  static const bugRelayKey = '5f0221703ec26d88c14ba5578325fa57';
 
   /// Spotify redirect URIs each user registers in their own Spotify developer app.
   static const spotifyDesktopRedirect = 'http://127.0.0.1:8888/callback';

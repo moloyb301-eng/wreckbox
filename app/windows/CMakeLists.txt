@@ -2,6 +2,10 @@
 cmake_minimum_required(VERSION 3.14)
 project(wreckbox LANGUAGES CXX)
 
+# permission_handler_windows (only used on Android, but always compiled) still uses <experimental/coroutine>,
+# which newer MSVC rejects outright. Microsoft's documented switch keeps it building.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "wreckbox")
