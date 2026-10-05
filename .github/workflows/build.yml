@@ -14,6 +14,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["bug-reports/**", "docs/**", "**.md"]   # screenshots from bug reports don't need a build
   pull_request:
   workflow_dispatch:
 
