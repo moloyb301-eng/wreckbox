@@ -4,7 +4,7 @@ class AppConfig {
   static const appName = 'WreckBox';
 
   /// Public repo the apps check for updates (GitHub Releases). SET-BEFORE-RELEASE.
-  static const releasesRepo = 'OWNER/wreckbox-releases';
+  static const releasesRepo = 'moloyb301-eng/wreckbox-releases';
 
   /// Bug-report relay (Cloudflare Worker, see relay/README.md). SET-BEFORE-RELEASE.
   static const bugRelayUrl = 'https://wreckbox-bug-relay.OWNER.workers.dev';
