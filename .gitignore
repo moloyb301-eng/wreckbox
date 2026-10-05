@@ -12,3 +12,7 @@ app/macos/Flutter/ephemeral/
 relay/.wrangler/
 dist/
 secrets/
+
+# Not for the public repo
+bug-reports/
+app/test/goldens/
