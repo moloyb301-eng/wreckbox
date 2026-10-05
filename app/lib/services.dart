@@ -188,18 +188,27 @@ class Updates {
   static Future<String> currentVersion() async => (await PackageInfo.fromPlatform()).version;
 
   /// Newer release in the public releases repo, with the download for this platform; null if up to date.
+  /// Last check's problem (no internet, GitHub busy…), or null if it worked. Lets the UI tell "up to date" apart
+  /// from "couldn't check".
+  static String? lastError;
+
   static Future<UpdateInfo?> check() async {
+    lastError = null;
     try {
       final res = await http.get(Uri.parse('https://api.github.com/repos/${AppConfig.releasesRepo}/releases/latest'),
-          headers: {'Accept': 'application/vnd.github+json'}).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return null;
+          headers: {'Accept': 'application/vnd.github+json'}).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) {
+        lastError = res.statusCode == 403 || res.statusCode == 429 ? 'GitHub is busy — try again in a few minutes.' : 'the update server answered ${res.statusCode}.';
+        return null;
+      }
       final j = jsonDecode(res.body);
       final latest = (j['tag_name'] as String? ?? '').replaceFirst('v', '');
       if (!_newer(latest, await currentVersion())) return null;
       final want = Platform.isAndroid ? '.apk' : Platform.isWindows ? 'windows' : 'mac';
       final asset = (j['assets'] as List).cast<Map>().where((a) => (a['name'] as String).toLowerCase().contains(want)).firstOrNull;
       return UpdateInfo(latest, j['body'] ?? '', asset?['browser_download_url'] ?? j['html_url']);
-    } catch (_) {
+    } catch (e) {
+      lastError = e is SocketException || e is TimeoutException ? 'no internet connection.' : '$e';
       return null;
     }
   }

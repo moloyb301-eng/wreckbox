@@ -43,6 +43,8 @@ class _SettingsPageState extends State<SettingsPage> {
   String status = '';
   bool importing = false;
   String version = '', engine = '';
+  String? updateStatus;
+  bool checking = false;
 
   @override
   void initState() {
@@ -287,14 +289,27 @@ class _SettingsPageState extends State<SettingsPage> {
         Text('Library folder: ${AppPaths.root.path}', style: T.ui(12, FontWeight.w400, T.text3)),
         const SizedBox(height: 10),
         PillButton(
-          label: 'Check for updates',
+          label: checking ? 'Checking…' : 'Check for updates',
           icon: Icons.system_update_alt,
-          onTap: () async {
-            final u = await Updates.check();
-            setState(() => status = u == null ? 'You have the latest version.' : 'Version ${u.version} is available.');
-            if (u != null) launchUrl(Uri.parse(u.url), mode: LaunchMode.externalApplication);
-          },
+          onTap: checking
+              ? null
+              : () async {
+                  setState(() => checking = true);
+                  final u = await Updates.check();
+                  final msg = u != null
+                      ? 'WreckBox ${u.version} is available — downloading it now.'
+                      : Updates.lastError != null
+                          ? "Couldn't check for updates: ${Updates.lastError}"
+                          : "You're up to date (version $version).";
+                  setState(() {
+                    checking = false;
+                    updateStatus = msg;
+                  });
+                  if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                  if (u != null) launchUrl(Uri.parse(u.url), mode: LaunchMode.externalApplication);
+                },
         ),
+        if (updateStatus != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(updateStatus!, style: T.ui(12.5, FontWeight.w600, T.text2))),
       ]),
       PillButton(label: 'Save settings', icon: Icons.check, style: PillStyle.primary, onTap: () async {
         await _saveAll();
