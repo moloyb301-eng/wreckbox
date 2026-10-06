@@ -34,6 +34,10 @@ class MainActivity : AudioServiceActivity() {
                     startActivity(Intent(if (Build.VERSION.SDK_INT >= 29) Settings.Panel.ACTION_WIFI else Settings.ACTION_WIFI_SETTINGS))
                     result.success(null)
                 }
+                // "Galaxy S23 Ultra" (what the phone calls itself), for the list of devices on the computer.
+                "deviceName" -> result.success(
+                    Settings.Global.getString(contentResolver, "device_name") ?: "${Build.MANUFACTURER} ${Build.MODEL}",
+                )
                 "start" -> start(result)
                 "stop" -> {
                     stop()

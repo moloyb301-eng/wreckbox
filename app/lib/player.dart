@@ -180,6 +180,7 @@ class Player extends ChangeNotifier {
     _rest = _rest.skip(more.length).toList();
     queue = [...queue, ...more];
     try {
+      await AccountConnect.refreshIfNeeded(); // a long session outlives a ticket: new tracks get a fresh one
       await audio.addAudioSources([for (final t in more) await _source(t, quality!)]);
     } catch (_) {}
   }

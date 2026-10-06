@@ -33,7 +33,7 @@ class PlaylistsView extends StatelessWidget {
                 ? Artwork(track: first.track, store: store, size: 48, radius: 8)
                 : Container(width: 48, height: 48, decoration: BoxDecoration(color: T.glassFill, borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.queue_music, color: T.text3)),
             title: Text(pl.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(14.5, FontWeight.w600)),
-            subtitle: Text('${pl.trackIDs.length} tracks · $playable playable', style: T.ui(12, FontWeight.w400, T.text3)),
+            subtitle: Text('${pl.trackIDs.length} ${pl.trackIDs.length == 1 ? 'track' : 'tracks'} · $playable playable', style: T.ui(12, FontWeight.w400, T.text3)),
             trailing: IconButton(
               tooltip: 'Play',
               icon: const Icon(Icons.play_circle_fill_rounded, color: T.lilac, size: 30),
@@ -70,7 +70,7 @@ class PlaylistPage extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${playlist.trackIDs.length} tracks · $playable playable from your own files', style: T.ui(12.5, FontWeight.w400, T.text2)),
+            Text('${playlist.trackIDs.length} ${playlist.trackIDs.length == 1 ? 'track' : 'tracks'} · $playable playable from your own files', style: T.ui(12.5, FontWeight.w400, T.text2)),
             const SizedBox(height: 10),
             Row(children: [
               PillButton(label: 'Play', icon: Icons.play_arrow_rounded, style: PillStyle.primary, onTap: playable == 0 ? null : () => PlaylistsView.playPlaylist(playlist)),
