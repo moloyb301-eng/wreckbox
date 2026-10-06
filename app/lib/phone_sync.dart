@@ -365,9 +365,19 @@ class PhoneSyncClient extends ChangeNotifier {
     switch (event) {
       case 'crate':
         final map = crateById ??= {};
+        final upgraded = <Map<String, dynamic>>[];
         for (final a in List<Map<String, dynamic>>.from(j['added'] ?? const [])) {
-          map[a['id'] as String] = a;
+          final id = a['id'] as String;
+          // The computer has a new file for a track this phone copied in the original quality (e.g. it found the
+          // FLAC): bring the better one over.
+          final st = store.state.tracks[id], local = st?.localPath;
+          if (map.containsKey(id) && st?.status == TrackStatus.downloaded && st?.source == 'phone-sync' && local != null &&
+              Settings.current.downloadQuality == 'flac' && File(local).existsSync() && File(local).lengthSync() != a['size']) {
+            upgraded.add(a);
+          }
+          map[id] = a;
         }
+        if (upgraded.isNotEmpty) unawaited(download(upgraded, (_, _, _) {}));
         for (final r in List<String>.from(j['removed'] ?? const [])) {
           map.remove(r);
         }
@@ -467,6 +477,7 @@ class PhoneSyncClient extends ChangeNotifier {
     }
   }
 
+  int _downloads = 0;
   /// Set to stop download() after the files in flight.
   bool cancelDownload = false;
   /// Bytes received by the current download(), for speed and time left.
@@ -478,8 +489,11 @@ class PhoneSyncClient extends ChangeNotifier {
       {String? quality, int parallel = 1}) async {
     await AccountConnect.refreshIfNeeded();
     final q = quality ?? Settings.current.downloadQuality;
-    cancelDownload = false;
-    bytesDone = 0;
+    // Another download may be running (a big copy + an upgrade arriving): only the first one resets the counters.
+    if (_downloads++ == 0) {
+      cancelDownload = false;
+      bytesDone = 0;
+    }
     var done = 0, failedInARow = 0;
     final todo = [...items];
     final client = http.Client();
@@ -512,6 +526,7 @@ class PhoneSyncClient extends ChangeNotifier {
       await Future.wait([for (var i = 0; i < max(1, parallel); i++) worker()]);
     } finally {
       client.close();
+      _downloads--;
     }
     if (done > 0) {
       store.log('phone sync', '$done tracks copied from the computer');
@@ -555,7 +570,10 @@ class PhoneSyncClient extends ChangeNotifier {
     }
     final want = res.contentLength;
     if (want != null && got < want) throw Exception('cut off after $got of $want bytes');
+    final previous = store.state.tracks[id]?.localPath;
     await part.rename(dest);
+    // A better copy replaces the old one (which may have had another extension).
+    if (previous != null && previous != dest && await File(previous).exists()) await File(previous).delete();
     final a = item['analysis'];
     if (a is Map) {
       final st = await File(dest).stat();
