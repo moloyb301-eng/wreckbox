@@ -91,6 +91,7 @@ class PlayerBar extends StatelessWidget {
     final sync = PlaybackSync.instance;
     final r = store.row(d.trackID!);
     final max = d.duration > 0 ? d.duration : 1.0;
+    final pos = d.duration > 0 ? d.livePosition.clamp(0, max).toDouble() : 0.0; // length not known yet: empty bar
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
       child: Glass(
@@ -126,10 +127,10 @@ class PlayerBar extends StatelessWidget {
             Expanded(
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(trackHeight: 3, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6), activeTrackColor: T.lilac, inactiveTrackColor: T.hairline, thumbColor: Colors.white, overlayShape: SliderComponentShape.noOverlay),
-                child: Slider(value: d.livePosition.clamp(0, max).toDouble(), max: max, onChanged: (_) {}, onChangeEnd: (v) => sync.command('seek', value: v)),
+                child: Slider(value: pos, max: max, onChanged: (_) {}, onChangeEnd: d.duration > 0 ? (v) => sync.command('seek', value: v) : null),
               ),
             ),
-            Text(_fmt(Duration(milliseconds: (d.duration * 1000).round())), style: T.dot(11, T.text3)),
+            Text(d.duration > 0 ? _fmt(Duration(milliseconds: (d.duration * 1000).round())) : '–:––', style: T.dot(11, T.text3)),
           ]),
         ]),
       ),
