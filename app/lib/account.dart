@@ -216,6 +216,9 @@ class Account {
   static Future<void> queueRequest(String computerId, {String? id, String? artist, String? title}) =>
       _call('POST', '/v1/requests', {'device': computerId, 'id': id, 'artist': artist, 'title': title});
 
+  /// Signs in with the one-time code from a signed-in computer's QR code (Sync to phone).
+  static Future<void> claimLink(String code) async => _signedIn(await _call('POST', '/v1/link/claim', {'code': code}));
+
   // MARK: Google
 
   /// Google sign-in runs on the account service (no Google keys in the app). The app gets a one-time code back,

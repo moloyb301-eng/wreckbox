@@ -6,6 +6,8 @@
 // Library sync: the app uploads library / state / analysis JSON (KV, one value per user + name).
 // Google sign-in: the server runs the OAuth flow (the client secret never ships in an app) and hands the app a
 // one-time code bound to a PKCE challenge, which the app swaps for a session.
+// Linking: a signed-in computer shows a QR code with a one-time link code (10 min); the phone that scans it is
+// signed in to the same account — no password typed on the phone.
 // Computers: each desktop registers its current tunnel URL + a private ticket secret. Phones never see that secret:
 // they ask for a short-lived ticket (HMAC-signed with it) and present that to the computer.
 // Requests: phones can queue "download this" for a computer that's offline; it collects them when it comes back.
@@ -28,6 +30,7 @@ export default {
       if (route === "GET /v1/auth/google/start") return await googleStart(url, env);
       if (route === "GET /v1/auth/google/callback") return await googleCallback(url, env, request);
       if (route === "POST /v1/auth/exchange") return await exchange(request, env);
+      if (route === "POST /v1/link/claim") return await claimLink(request, env);
 
       const user = await authed(request, env);
       if (!user) return json({ error: "Please sign in again." }, 401);
@@ -38,6 +41,11 @@ export default {
         return json({ ok: true });
       }
       if (route === "POST /v1/password") return await changePassword(request, env, user);
+      if (route === "POST /v1/link/start") {
+        const code = b64url(crypto.getRandomValues(new Uint8Array(16)));
+        await env.LIBRARY.put(`link:${code}`, JSON.stringify({ user: user.id }), { expirationTtl: 600 });
+        return json({ code, expires: Date.now() + 600000 });
+      }
       if (route === "GET /v1/blobs") {
         const { results } = await env.DB.prepare("SELECT name, updated, size, device FROM blobs WHERE user = ?").bind(user.id).all();
         return json({ blobs: results });
@@ -228,6 +236,24 @@ async function exchange(request, env) {
   await env.LIBRARY.delete(`authcode:${code}`);
   const digest = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(verifier || "")))));
   if (!timingSafeEqual(digest, saved.challenge)) return json({ error: "Sign-in check failed — try again." }, 400);
+  const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(saved.user).first();
+  if (!user) return json({ error: "Account not found." }, 404);
+  return json({ token: await newSession(env, user.id, request), user: publicUser(user) });
+}
+
+// A phone scanned the computer's QR code: one use, then it's gone.
+async function claimLink(request, env) {
+  const ip = request.headers.get("CF-Connecting-IP") || "?";
+  const k = `l:${ip}:${new Date().toISOString().slice(0, 13)}`;
+  const row = await env.DB.prepare("SELECT n FROM login_attempts WHERE key = ?").bind(k).first();
+  if (row && row.n >= LOGIN_LIMIT) return json({ error: "Too many attempts — try again in an hour." }, 429);
+  const { code } = await request.json();
+  const saved = /^[A-Za-z0-9_-]{22}$/.test(code || "") && (await env.LIBRARY.get(`link:${code}`, "json"));
+  if (!saved) {
+    await env.DB.prepare("INSERT INTO login_attempts (key, n) VALUES (?, 1) ON CONFLICT (key) DO UPDATE SET n = n + 1").bind(k).run();
+    return json({ error: "This code has expired — show a fresh one on your computer (Sync to phone)." }, 400);
+  }
+  await env.LIBRARY.delete(`link:${code}`);
   const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(saved.user).first();
   if (!user) return json({ error: "Account not found." }, 404);
   return json({ token: await newSession(env, user.id, request), user: publicUser(user) });

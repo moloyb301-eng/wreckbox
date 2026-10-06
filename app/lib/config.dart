@@ -23,6 +23,9 @@ class AppConfig {
   /// Account service (Cloudflare Worker, see api/).
   static const accountApi = 'https://wreckbox-api.moloyb301.workers.dev';
 
+  /// Google sign-in needs a Google OAuth client on the account service (api/); off until one is set up.
+  static const googleSignIn = false;
+
   /// Port the desktop app serves the library to paired phones on.
   static const phoneSyncPort = 47390;
 }

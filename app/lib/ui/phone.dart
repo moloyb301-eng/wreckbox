@@ -323,11 +323,12 @@ class _ComputerPageState extends State<_ComputerPage> {
       setState(() => status = "That doesn't look like a WreckBox pairing link.");
       return;
     }
-    setState(() => status = 'Pairing…');
-    final base = await PhoneSyncClient.pair(info);
-    if (base == null) {
-      setState(() => status = "Couldn't reach the computer — same Wi-Fi? Is sharing on?");
+    setState(() => status = info['link'] != null ? 'Signing in…' : 'Pairing…');
+    final problem = await PhoneLink.handle(info, widget.store);
+    if (problem != null) {
+      setState(() => status = problem);
     } else {
+      setState(() {});
       await _load();
     }
   }
@@ -343,11 +344,15 @@ class _ComputerPageState extends State<_ComputerPage> {
               final raw = capture.barcodes.firstOrNull?.rawValue;
               final info = raw == null ? null : PhoneSyncClient.parsePairing(raw);
               if (info == null) return;
-              setState(() => scanning = false);
-              final base = await PhoneSyncClient.pair(info);
-              if (base == null) {
-                setState(() => status = "Found the code but couldn't reach the computer — check you're on the same Wi-Fi.");
+              setState(() {
+                scanning = false;
+                status = info['link'] != null ? 'Signing in…' : 'Pairing…';
+              });
+              final problem = await PhoneLink.handle(info, widget.store);
+              if (problem != null) {
+                setState(() => status = problem);
               } else {
+                if (Account.signedIn) await _findComputers();
                 await _load();
               }
             }),

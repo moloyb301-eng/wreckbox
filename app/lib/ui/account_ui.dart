@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../account.dart';
+import '../config.dart';
 import '../phone_sync.dart';
 import '../settings.dart';
 import '../store.dart';
@@ -136,8 +137,13 @@ class _AccountSectionState extends State<AccountSection> {
           ),
           const SizedBox(height: 10),
           if (Platform.isAndroid || Platform.isIOS) ...[
-            PillButton(label: 'Continue with Google', icon: Icons.account_circle, style: PillStyle.smart, onTap: busy ? null : _google),
+            Text('Easiest: on your computer open WreckBox → Sync to phone, then here go to Computer → Scan pairing code. '
+                'That signs this phone in and connects it — no password needed.', style: T.ui(12.5, FontWeight.w600, T.lilac)),
             const SizedBox(height: 10),
+            if (AppConfig.googleSignIn) ...[
+              PillButton(label: 'Continue with Google', icon: Icons.account_circle, style: PillStyle.smart, onTap: busy ? null : _google),
+              const SizedBox(height: 10),
+            ],
             Text('or with email', style: T.ui(12, FontWeight.w400, T.text3)),
             const SizedBox(height: 8),
           ],
@@ -161,6 +167,36 @@ class _AccountSectionState extends State<AccountSection> {
 }
 
 /// Phone: picks the current address of a computer from the account and connects to it.
+/// Phone: everything a scanned code from a computer can do — sign in with its one-time code, connect through the
+/// account (works anywhere), or fall back to pairing on the same Wi-Fi. Returns a status line.
+class PhoneLink {
+  static Future<String?> handle(Map<String, String> info, LibraryStore store) async {
+    final link = info['link'], computer = info['computer'];
+    String? linkProblem;
+    if (link != null) {
+      try {
+        await Account.claimLink(link);
+        await Account.downloadLibrary(store).catchError((_) => false);
+      } catch (e) {
+        linkProblem = '$e';
+      }
+    }
+    if (Account.signedIn && computer != null) {
+      Settings.current.connectedComputerId = computer;
+      await Settings.current.save();
+      try {
+        if (await AccountConnect.reconnect() != null) return null;
+      } catch (_) {}
+    }
+    if (info['hosts']!.isEmpty) return linkProblem ?? 'Signed in. Turn on "Use from anywhere" on your computer to connect away from home.';
+    if (await PhoneSyncClient.pair(info) != null) return null;
+    if (linkProblem != null) return linkProblem;
+    if (Account.signedIn) return 'Signed in, but your computer isn\'t reachable yet — on the computer turn on "Use from anywhere" (Sync to phone), then tap Refresh.';
+    return 'This code only works on the same Wi-Fi. To connect from anywhere: on your computer sign in under Sync to phone '
+        '(the code then signs this phone in too), and scan it again.';
+  }
+}
+
 class AccountConnect {
   /// Re-resolves the remembered computer (tunnel addresses change when the computer restarts).
   /// Returns the computer if it's online and now connected.

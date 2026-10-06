@@ -177,8 +177,14 @@ class PhoneSyncClient extends ChangeNotifier {
     if (u == null || u.scheme != 'wreckbox' || u.host != 'pair') return null;
     final t = u.queryParameters['t'], port = u.queryParameters['port'] ?? '${AppConfig.phoneSyncPort}';
     final hosts = (u.queryParameters['hosts'] ?? '').split(',').where((h) => h.isNotEmpty).toList();
-    if (t == null || hosts.isEmpty) return null;
-    return {'hosts': hosts.join(','), 'port': port, 't': t};
+    final link = u.queryParameters['link'], computer = u.queryParameters['computer'];
+    if (t == null || (hosts.isEmpty && link == null)) return null;
+    return {
+      'hosts': hosts.join(','), 'port': port, 't': t,
+      // A signed-in computer adds a one-time code that signs this phone in to the same account.
+      if (link != null) 'link': link,
+      if (computer != null) 'computer': computer,
+    };
   }
 
   /// Credentials go in headers only. Older computers read X-WreckBox-Token; newer ones Authorization.
