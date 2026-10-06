@@ -58,9 +58,13 @@ const audioExtensions = {'mp3', 'wav', 'aif', 'aiff', 'flac', 'm4a', 'alac', 'aa
 bool isAudio(String path) => audioExtensions.contains(p.extension(path).replaceFirst('.', '').toLowerCase());
 
 /// Writes a file atomically (temp file + rename) so a crash never leaves a half-written JSON file.
+int _tmpSeq = 0;
+
 Future<void> writeAtomic(File f, String contents) async {
   await f.parent.create(recursive: true);
-  final tmp = File('${f.path}.tmp');
+  // A temp name of its own, so two saves of the same file at once can't take each other's temp file.
+  final tmp = File('${f.path}.${DateTime.now().microsecondsSinceEpoch}.$_tmpSeq.tmp');
+  _tmpSeq++;
   await tmp.writeAsString(contents, flush: true);
   await tmp.rename(f.path);
 }

@@ -24,6 +24,12 @@ class Settings {
   String? accountToken, accountEmail, deviceId, connectedComputerId;
   String accountName = '';
   bool shareRemotely = false; // desktop: keep the tunnel up so phones can reach this computer anywhere
+  // Phone, connected through the account: the computer's tunnel address, and when pairToken (a ticket) runs out.
+  String? remoteDesktop;
+  int ticketExpires = 0; // ms since epoch; 0 = a pairing token from the QR code, which doesn't expire
+  // Phone: quality to stream / download at — flac (the original), high, med, low.
+  String qualityWifi = 'flac', qualityMobile = 'med', downloadQuality = 'flac';
+  List<String> autoSyncPlaylists = []; // phone: bring new tracks of these playlists over automatically
 
   static Settings current = Settings();
 
@@ -52,7 +58,13 @@ class Settings {
         ..accountName = j['accountName'] ?? ''
         ..deviceId = j['deviceId']
         ..connectedComputerId = j['connectedComputerId']
-        ..shareRemotely = j['shareRemotely'] ?? false;
+        ..shareRemotely = j['shareRemotely'] ?? false
+        ..remoteDesktop = j['remoteDesktop']
+        ..ticketExpires = j['ticketExpires'] ?? 0
+        ..qualityWifi = j['qualityWifi'] ?? 'flac'
+        ..qualityMobile = j['qualityMobile'] ?? 'med'
+        ..downloadQuality = j['downloadQuality'] ?? 'flac'
+        ..autoSyncPlaylists = List<String>.from(j['autoSyncPlaylists'] ?? const []);
     } catch (_) {
       current = Settings();
     }
@@ -83,6 +95,12 @@ class Settings {
           'deviceId': deviceId,
           'connectedComputerId': connectedComputerId,
           'shareRemotely': shareRemotely,
+          'remoteDesktop': remoteDesktop,
+          'ticketExpires': ticketExpires,
+          'qualityWifi': qualityWifi,
+          'qualityMobile': qualityMobile,
+          'downloadQuality': downloadQuality,
+          'autoSyncPlaylists': autoSyncPlaylists,
         }),
       );
 }

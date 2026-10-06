@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  connectivity_plus
   desktop_webview_window
   media_kit_libs_windows_audio
   permission_handler_windows

@@ -1,4 +1,4 @@
-// Computer → phone library sync over the local network.
+// Computer → phone library sync: over the local network, or from anywhere through the computer's tunnel.
 //
 // Desktop: serves the crate (tracks you have, with their analysis) on port 47390. Every request must carry
 // the pairing token shown in the QR code, so only phones you paired can browse or download.
@@ -10,18 +10,22 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
+import 'account.dart';
 import 'config.dart';
 import 'models.dart';
 import 'player.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'store.dart';
+import 'ui/account_ui.dart' show AccountConnect;
 
 class PhoneSyncServer {
   /// The sync port (WRECKBOX_SYNC_PORT overrides it, e.g. to test next to another WreckBox).
@@ -149,10 +153,24 @@ class PhoneSyncServer {
       };
 }
 
-/// Phone side.
-class PhoneSyncClient {
+/// Phone side. Talks to the paired computer — on the same Wi-Fi directly, or from anywhere through its tunnel —
+/// keeps a live connection for instant updates (new tracks, request progress), downloads in the chosen quality,
+/// and asks the computer to find tracks it doesn't have yet.
+class PhoneSyncClient extends ChangeNotifier {
+  static PhoneSyncClient? instance; // the phone's client, for track sheets
   final LibraryStore store;
-  PhoneSyncClient(this.store);
+  PhoneSyncClient(this.store) {
+    instance = this;
+  }
+
+  /// What the computer has: id → {id, ext, size, analysis}. Null until the first load.
+  Map<String, Map<String, dynamic>>? crateById;
+  /// Requests in progress: track id → searching / not_found / failed / ready.
+  final Map<String, String> requests = {};
+  bool live = false; // the events stream is connected
+  String? lastError;
+
+  static const qualities = {'flac': 'FLAC (original)', 'high': 'High · 256k', 'med': 'Medium · 160k', 'low': 'Low · 96k'};
 
   static Map<String, String>? parsePairing(String raw) {
     final u = Uri.tryParse(raw);
@@ -163,16 +181,25 @@ class PhoneSyncClient {
     return {'hosts': hosts.join(','), 'port': port, 't': t};
   }
 
+  /// Credentials go in headers only. Older computers read X-WreckBox-Token; newer ones Authorization.
+  static Map<String, String> authHeaders([String? token]) {
+    final t = token ?? Settings.current.pairToken ?? '';
+    return {'authorization': 'Bearer $t', 'x-wreckbox-token': t};
+  }
+
   /// Tries each address from the QR code and keeps the first that answers.
   static Future<String?> pair(Map<String, String> info) async {
     for (final h in info['hosts']!.split(',')) {
       final base = 'http://$h:${info['port']}';
       try {
-        final r = await http.get(Uri.parse('$base/info'), headers: {'x-wreckbox-token': info['t']!}).timeout(const Duration(seconds: 4));
+        final r = await http.get(Uri.parse('$base/info'), headers: authHeaders(info['t'])).timeout(const Duration(seconds: 4));
         if (r.statusCode == 200) {
           Settings.current
             ..pairedDesktop = base
-            ..pairToken = info['t'];
+            ..remoteDesktop = null
+            ..pairToken = info['t']
+            ..ticketExpires = 0
+            ..connectedComputerId = null;
           await Settings.current.save();
           return base;
         }
@@ -181,11 +208,43 @@ class PhoneSyncClient {
     return null;
   }
 
-  Map<String, String> get _headers => {'x-wreckbox-token': Settings.current.pairToken ?? ''};
+  /// Connected through the account: use the computer's home-network address when this phone can reach it
+  /// (faster, and nothing goes through the internet), otherwise its tunnel.
+  static Future<void> preferLan() async {
+    final s = Settings.current;
+    final remote = s.remoteDesktop;
+    if (remote == null || s.pairToken == null) return;
+    try {
+      final r = await http.get(Uri.parse('$remote/info'), headers: authHeaders()).timeout(const Duration(seconds: 8));
+      final info = jsonDecode(r.body) as Map<String, dynamic>;
+      for (final ip in List<String>.from(info['lan'] ?? const [])) {
+        final base = 'http://$ip:${info['port'] ?? AppConfig.phoneSyncPort}';
+        try {
+          final l = await http.get(Uri.parse('$base/info'), headers: authHeaders()).timeout(const Duration(milliseconds: 1500));
+          if (l.statusCode == 200) {
+            s.pairedDesktop = base;
+            await s.save();
+            return;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    s.pairedDesktop = remote;
+    await s.save();
+  }
+
+  Map<String, String> get _headers => authHeaders();
   String? get base => Settings.current.pairedDesktop;
 
+  /// On Wi-Fi the Wi-Fi quality, on mobile data the mobile one.
+  static Future<String> streamQuality() async {
+    final c = await Connectivity().checkConnectivity();
+    final s = Settings.current;
+    return c.contains(ConnectivityResult.wifi) || c.contains(ConnectivityResult.ethernet) ? s.qualityWifi : s.qualityMobile;
+  }
+
   Future<Map<String, dynamic>> info() async =>
-      jsonDecode((await http.get(Uri.parse('$base/info'), headers: _headers).timeout(const Duration(seconds: 6))).body);
+      jsonDecode((await http.get(Uri.parse('$base/info'), headers: _headers).timeout(const Duration(seconds: 8))).body);
 
   /// Use the computer's Spotify library on the phone (no separate Spotify setup needed).
   Future<void> adoptLibrary() async {
@@ -199,12 +258,194 @@ class PhoneSyncClient {
     final r = await http.get(Uri.parse('$base/crate'), headers: _headers).timeout(const Duration(seconds: 15));
     if (r.statusCode != 200) throw Exception('computer said ${r.statusCode}');
     final list = List<Map<String, dynamic>>.from(jsonDecode(r.body));
-    Player.instance.remoteIds = {for (final c in list) c['id'] as String}; // these can stream to the phone
+    crateById = {for (final c in list) c['id'] as String: c};
+    Player.instance.remoteIds = crateById!.keys.toSet(); // these can stream to the phone
+    notifyListeners();
     return list;
   }
 
-  /// Downloads `items` (from crate()) the phone doesn't have yet. `progress(done, total, name)`.
-  Future<int> download(List<Map<String, dynamic>> items, void Function(int, int, String) progress) async {
+  // MARK: live updates
+
+  bool _wantLive = false, _polling = false;
+  int _seq = -1, _failures = 0;
+  http.Client? _pollClient;
+
+  /// Long-polls the computer for news (new tracks, request progress): each call returns as soon as something
+  /// happens, or after ~25 s with nothing. Works on Wi-Fi and through the tunnel, which can't hold a stream open.
+  Future<void> startLive() async {
+    _wantLive = true;
+    if (_polling || base == null) return;
+    _polling = true;
+    _pollClient = http.Client();
+    try {
+      while (_wantLive) {
+        try {
+          if (_seq < 0) {
+            await crate(); // catch up on anything missed while disconnected
+            _seq = (await _poll(-1))['seq'] as int;
+            unawaited(_autoSync());
+          }
+          final j = await _poll(_seq);
+          if (!live) {
+            live = true;
+            notifyListeners();
+          }
+          _failures = 0;
+          if (j['reset'] == true) {
+            _seq = -1; // the computer restarted or we fell behind: reload
+            continue;
+          }
+          for (final e in List<Map<String, dynamic>>.from(j['events'] ?? const [])) {
+            _onEvent(e['event'] as String, e['data']);
+          }
+          _seq = j['seq'] as int;
+        } catch (e) {
+          lastError = '$e';
+          if (live) {
+            live = false;
+            notifyListeners();
+          }
+          _seq = -1;
+          final wait = Duration(seconds: min(60, 2 << min(_failures++, 5)));
+          await Future.delayed(wait);
+          // The computer's address may have changed (restart) or the ticket run out: ask the account again.
+          if (_wantLive && Account.signedIn && Settings.current.connectedComputerId != null) {
+            try {
+              await AccountConnect.refreshIfNeeded();
+              if (_failures > 1) await AccountConnect.reconnect();
+            } catch (_) {}
+          }
+        }
+      }
+    } finally {
+      _polling = false;
+      _pollClient?.close();
+      _pollClient = null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _poll(int after) async {
+    final r = await _pollClient!
+        .get(Uri.parse('$base/poll?after=$after'), headers: _headers)
+        .timeout(const Duration(seconds: 40));
+    if (r.statusCode != 200) throw Exception('computer said ${r.statusCode}');
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  void stopLive() {
+    _wantLive = false;
+    _pollClient?.close(); // ends a waiting poll
+    live = false;
+    notifyListeners();
+  }
+
+  void _onEvent(String event, dynamic j) {
+    switch (event) {
+      case 'crate':
+        final map = crateById ??= {};
+        for (final a in List<Map<String, dynamic>>.from(j['added'] ?? const [])) {
+          map[a['id'] as String] = a;
+        }
+        for (final r in List<String>.from(j['removed'] ?? const [])) {
+          map.remove(r);
+        }
+        Player.instance.remoteIds = map.keys.toSet();
+        notifyListeners();
+        _autoSync();
+      case 'request':
+        final id = j['id'] as String;
+        requests[id] = j['status'] as String;
+        notifyListeners();
+        if (j['status'] == 'ready') _fetchRequested(id);
+    }
+  }
+
+  // MARK: requests
+
+  /// Asks the computer to find `id` (or a song by artist + title) on Soulseek. If the computer is offline,
+  /// the request waits in the account until it's back. Returns the status.
+  Future<String> request({String? id, String? artist, String? title}) async {
+    try {
+      final r = await http
+          .post(Uri.parse('$base/request'), headers: {..._headers, 'content-type': 'application/json'},
+              body: jsonEncode({'id': id, 'artist': artist, 'title': title}))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) throw Exception('computer said ${r.statusCode}');
+      final j = jsonDecode(r.body);
+      requests[j['id'] as String] = j['status'] as String;
+      notifyListeners();
+      if (j['status'] == 'ready') _fetchRequested(j['id']);
+      return j['status'];
+    } catch (_) {
+      final cid = Settings.current.connectedComputerId;
+      if (!Account.signedIn || cid == null) rethrow;
+      await Account.queueRequest(cid, id: id, artist: artist, title: title);
+      if (id != null) requests[id] = 'queued';
+      notifyListeners();
+      return 'queued';
+    }
+  }
+
+  /// A requested track is on the computer: bring it to the phone (refreshing the library first if it's a
+  /// song that wasn't in any playlist before).
+  Future<void> _fetchRequested(String id) async {
+    if (store.track(id) == null) {
+      try {
+        await adoptLibrary();
+      } catch (_) {}
+    }
+    final item = crateById?[id];
+    if (item == null || store.track(id) == null) return;
+    await download([item], (_, _, _) {});
+    requests.remove(id);
+    notifyListeners();
+  }
+
+  /// Makes the computer prepare the next tracks at `quality`, so skipping to them starts instantly.
+  Future<void> prepare(List<String> ids, String quality) async {
+    if (base == null || ids.isEmpty || quality == 'flac') return;
+    try {
+      await http.post(Uri.parse('$base/prepare'), headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({'ids': ids, 'q': quality})).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
+  // MARK: downloads
+
+  bool _syncing = false;
+
+  /// Tracks of the auto-sync playlists that the computer has and this phone doesn't.
+  List<Map<String, dynamic>> autoSyncMissing() {
+    final crate = crateById, lib = store.library;
+    if (crate == null || lib == null) return const [];
+    final want = Settings.current.autoSyncPlaylists.toSet();
+    final out = <String, Map<String, dynamic>>{};
+    for (final pl in lib.playlists) {
+      if (!want.contains(pl.name)) continue;
+      for (final id in pl.trackIDs) {
+        if (crate.containsKey(id) && store.state.tracks[id]?.status != TrackStatus.downloaded) out[id] = crate[id]!;
+      }
+    }
+    return out.values.toList();
+  }
+
+  Future<void> _autoSync() async {
+    if (_syncing) return;
+    final todo = autoSyncMissing();
+    if (todo.isEmpty) return;
+    _syncing = true;
+    try {
+      await download(todo, (_, _, _) {});
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  /// Downloads `items` (from crate()) the phone doesn't have yet, at `quality` (default: the download setting).
+  /// `progress(done, total, name)`.
+  Future<int> download(List<Map<String, dynamic>> items, void Function(int, int, String) progress, {String? quality}) async {
+    await AccountConnect.refreshIfNeeded();
+    final q = quality ?? Settings.current.downloadQuality;
     var done = 0;
     final client = http.Client();
     try {
@@ -212,11 +453,13 @@ class PhoneSyncClient {
         final id = item['id'] as String;
         final t = store.track(id);
         if (t == null) continue;
-        final dest = p.join(AppPaths.tracks.path, '${t.fileName}${item['ext']}');
         progress(done, items.length, t.title);
-        final req = http.Request('GET', Uri.parse('$base/file/${Uri.encodeComponent(id)}'))..headers.addAll(_headers);
+        final req = http.Request('GET', Uri.parse('$base/file/${Uri.encodeComponent(id)}?q=$q'))..headers.addAll(_headers);
         final res = await client.send(req);
         if (res.statusCode != 200) continue;
+        // A smaller copy comes back as AAC (.m4a); the original keeps its own format.
+        final ext = (res.headers['content-type'] ?? '') == 'audio/mp4' && item['ext'] != '.m4a' && item['ext'] != '.alac' ? '.m4a' : item['ext'];
+        final dest = p.join(AppPaths.tracks.path, '${t.fileName}$ext');
         await AppPaths.tracks.create(recursive: true);
         final tmp = File('$dest.part');
         await res.stream.pipe(tmp.openWrite());
@@ -228,14 +471,17 @@ class PhoneSyncClient {
         }
         store.state.tracks[id] = TrackState(status: TrackStatus.downloaded, localPath: dest, source: 'phone-sync');
         done++;
+        store.changed();
       }
     } finally {
       client.close();
     }
-    store.log('phone sync', '$done tracks copied from the computer');
-    await store.saveAnalysis();
-    await store.save();
-    store.changed();
+    if (done > 0) {
+      store.log('phone sync', '$done tracks copied from the computer');
+      await store.saveAnalysis();
+      await store.save();
+      store.changed();
+    }
     return done;
   }
 }

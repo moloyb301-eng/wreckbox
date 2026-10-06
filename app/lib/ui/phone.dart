@@ -251,8 +251,9 @@ class _ComputerPage extends StatefulWidget {
 }
 
 class _ComputerPageState extends State<_ComputerPage> {
-  List<Map<String, dynamic>>? crate;
+  List<Map<String, dynamic>>? get crate => widget.client.crateById?.values.toList();
   String status = '';
+  final reqArtist = TextEditingController(), reqTitle = TextEditingController();
   final picked = <String>{}; // playlist names
   bool scanning = false, working = false;
 
@@ -262,10 +263,9 @@ class _ComputerPageState extends State<_ComputerPage> {
       final info = await widget.client.info();
       if (widget.store.library == null) await widget.client.adoptLibrary();
       final c = await widget.client.crate();
-      setState(() {
-        crate = c;
-        status = 'Connected to ${info['name']} — ${c.length} tracks available';
-      });
+      final where = (Settings.current.pairedDesktop ?? '').startsWith('https://') ? 'from anywhere' : 'on Wi-Fi';
+      setState(() => status = 'Connected to ${info['name']} $where — ${c.length} tracks available');
+      widget.client.startLive();
     } catch (e) {
       setState(() => status = "Can't reach the computer. Same Wi-Fi? Is \"Sync to phone\" sharing on? ($e)");
     }
@@ -356,6 +356,42 @@ class _ComputerPageState extends State<_ComputerPage> {
         TextButton(onPressed: () => setState(() => scanning = false), child: const Text('Cancel')),
       ]);
     }
+    return ListenableBuilder(listenable: widget.client, builder: (context, _) => _content());
+  }
+
+  Future<void> _requestSong() async {
+    final artist = reqArtist.text.trim(), title = reqTitle.text.trim();
+    if (artist.isEmpty || title.isEmpty) return;
+    try {
+      final st = await widget.client.request(artist: artist, title: title);
+      reqArtist.clear();
+      reqTitle.clear();
+      setState(() => status = st == 'queued'
+          ? 'Your computer is offline — it will look for "$title" when it\'s back.'
+          : 'Your computer is looking for "$title" on Soulseek. It lands on this phone when it\'s found.');
+    } catch (e) {
+      setState(() => status = "Couldn't send the request: $e");
+    }
+  }
+
+  Widget _qualityPicker() {
+    final s = Settings.current;
+    return DropdownButton<String>(
+      value: s.downloadQuality,
+      dropdownColor: T.bgRaised,
+      style: T.ui(13, FontWeight.w600),
+      underline: const SizedBox(),
+      items: [for (final e in PhoneSyncClient.qualities.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+      onChanged: (v) async {
+        if (v == null) return;
+        s.downloadQuality = v;
+        await s.save();
+        setState(() {});
+      },
+    );
+  }
+
+  Widget _content() {
     final lib = widget.store.library;
     final have = {for (final e in widget.store.state.tracks.entries) if (e.value.status == TrackStatus.downloaded) e.key};
     final available = {for (final c in crate ?? const <Map<String, dynamic>>[]) c['id'] as String: c};
@@ -401,6 +437,14 @@ class _ComputerPageState extends State<_ComputerPage> {
           const DotLabel('Your computer', color: T.text),
           const SizedBox(height: 8),
           Text(status.isEmpty ? 'On your computer open WreckBox → Sync to phone → Start sharing, then scan the code.' : status, style: T.ui(13, FontWeight.w400, T.text2)),
+          if (widget.client.crateById != null) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              Icon(Icons.circle, size: 8, color: widget.client.live ? T.lilac : T.text3),
+              const SizedBox(width: 6),
+              Text(widget.client.live ? 'Live — new tracks show up instantly' : 'Reconnecting…', style: T.ui(12, FontWeight.w600, T.text3)),
+            ]),
+          ],
           const SizedBox(height: 10),
           Wrap(spacing: 8, children: [
             PillButton(label: Settings.current.pairedDesktop == null ? 'Scan pairing code' : 'Pair again', icon: Icons.qr_code_scanner, style: PillStyle.primary, onTap: () => setState(() => scanning = true)),
@@ -409,10 +453,39 @@ class _ComputerPageState extends State<_ComputerPage> {
           ]),
         ]),
       ),
+      if (crate != null) ...[
+        const SizedBox(height: 12),
+        Glass(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const DotLabel('Request a song', color: T.text),
+            const SizedBox(height: 6),
+            Text('Your computer looks for it on Soulseek right away; it comes to this phone when it\'s found.', style: T.ui(12.5, FontWeight.w400, T.text2)),
+            const SizedBox(height: 8),
+            TextField(controller: reqArtist, style: T.ui(14), decoration: const InputDecoration(hintText: 'Artist')),
+            TextField(controller: reqTitle, style: T.ui(14), decoration: const InputDecoration(hintText: 'Title'), onSubmitted: (_) => _requestSong()),
+            const SizedBox(height: 8),
+            PillButton(label: 'Request', icon: Icons.travel_explore, style: PillStyle.smart, onTap: _requestSong),
+            for (final r in widget.client.requests.entries)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(children: [
+                  Expanded(child: Text(widget.store.describe(r.key), maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(12.5, FontWeight.w600))),
+                  RequestChip(status: r.value),
+                ]),
+              ),
+          ]),
+        ),
+      ],
       if (crate != null && lib != null) ...[
         const SizedBox(height: 12),
         const DotLabel('Pick playlists to bring to the phone'),
-        const SizedBox(height: 8),
+        Row(children: [
+          Text('Quality', style: T.ui(13, FontWeight.w400, T.text2)),
+          const SizedBox(width: 10),
+          _qualityPicker(),
+        ]),
+        const SizedBox(height: 4),
         // The button sits above the list so it's reachable without scrolling past every playlist.
         PillButton(
           label: working ? 'Downloading…' : 'Download ${unique.length} tracks',
@@ -439,8 +512,48 @@ class _ComputerPageState extends State<_ComputerPage> {
             title: Text(pl.name, style: T.ui(14, FontWeight.w600)),
             subtitle: Text('${pl.trackIDs.where(available.containsKey).length} on the computer · ${pl.trackIDs.where(have.contains).length} already here',
                 style: T.ui(12, FontWeight.w400, T.text3)),
+            // Auto-sync: new tracks of this playlist come over by themselves as soon as the computer has them.
+            secondary: IconButton(
+              tooltip: 'Keep in sync automatically',
+              icon: Icon(Icons.sync, color: Settings.current.autoSyncPlaylists.contains(pl.name) ? T.lilac : T.text3),
+              onPressed: () async {
+                final s = Settings.current;
+                s.autoSyncPlaylists.contains(pl.name) ? s.autoSyncPlaylists.remove(pl.name) : s.autoSyncPlaylists.add(pl.name);
+                await s.save();
+                setState(() {});
+                if (s.autoSyncPlaylists.contains(pl.name)) {
+                  final todo = widget.client.autoSyncMissing();
+                  if (todo.isNotEmpty) {
+                    setState(() => status = 'Syncing ${todo.length} tracks from ${pl.name}…');
+                    final n = await widget.client.download(todo, (d, t, name) => setState(() => status = 'Copying ${d + 1}/$t: $name'));
+                    setState(() => status = 'Copied $n tracks. New ones from ${pl.name} will come over automatically.');
+                  }
+                }
+              },
+            ),
           ),
       ],
     ]);
+  }
+}
+
+/// Where a request from this phone stands.
+class RequestChip extends StatelessWidget {
+  final String status;
+  const RequestChip({super.key, required this.status});
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (status) {
+      'ready' => ('On its way', T.lilac),
+      'not_found' => ('Not found', T.peach),
+      'failed' => ('Failed', T.peach),
+      'queued' => ('Waiting for computer', T.text3),
+      _ => ('Searching…', T.text2),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.6))),
+      child: Text(label, style: T.ui(11.5, FontWeight.w600, color)),
+    );
   }
 }

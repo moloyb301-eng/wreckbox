@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../account.dart';
+import '../phone_sync.dart';
 import '../settings.dart';
 import '../store.dart';
 import 'theme.dart';
@@ -36,6 +37,28 @@ class _AccountSectionState extends State<AccountSection> {
       }
       password.clear();
       // Phone: bring in the account's playlists. Computer: put this library in the account.
+      if (Platform.isAndroid || Platform.isIOS) {
+        final had = await Account.downloadLibrary(widget.store);
+        message = had ? 'Signed in — your playlists are loaded.' : 'Signed in. Your library appears here once your computer has synced it.';
+      } else {
+        await Account.uploadLibrary(widget.store);
+        message = 'Signed in — your library is saved to your account.';
+      }
+    } catch (e) {
+      message = '$e';
+    } finally {
+      setState(() => busy = false);
+      widget.onChanged?.call();
+    }
+  }
+
+  Future<void> _google() async {
+    setState(() {
+      busy = true;
+      message = null;
+    });
+    try {
+      await Account.signInWithGoogle();
       if (Platform.isAndroid || Platform.isIOS) {
         final had = await Account.downloadLibrary(widget.store);
         message = had ? 'Signed in — your playlists are loaded.' : 'Signed in. Your library appears here once your computer has synced it.';
@@ -112,6 +135,12 @@ class _AccountSectionState extends State<AccountSection> {
             style: T.ui(12.5, FontWeight.w400, T.text2),
           ),
           const SizedBox(height: 10),
+          if (Platform.isAndroid || Platform.isIOS) ...[
+            PillButton(label: 'Continue with Google', icon: Icons.account_circle, style: PillStyle.smart, onTap: busy ? null : _google),
+            const SizedBox(height: 10),
+            Text('or with email', style: T.ui(12, FontWeight.w400, T.text3)),
+            const SizedBox(height: 8),
+          ],
           if (creating) ...[TextField(controller: name, style: T.ui(14), decoration: _deco('Your name')), const SizedBox(height: 8)],
           TextField(controller: email, style: T.ui(14), keyboardType: TextInputType.emailAddress, decoration: _deco('Email')),
           const SizedBox(height: 8),
@@ -145,11 +174,24 @@ class AccountConnect {
     return c;
   }
 
+  /// Connects through the account: a fresh ticket for `c`, then the home Wi-Fi address if the phone can reach it.
   static Future<void> use(RemoteComputer c) async {
+    final t = await Account.ticket(c.id);
     final s = Settings.current;
-    s.pairedDesktop = c.url;
-    s.pairToken = c.syncToken;
+    s.remoteDesktop = t['url'] ?? c.url;
+    s.pairedDesktop = s.remoteDesktop;
+    s.pairToken = t['ticket'];
+    s.ticketExpires = t['expires'] ?? 0;
     s.connectedComputerId = c.id;
     await s.save();
+    await PhoneSyncClient.preferLan();
+  }
+
+  /// Gets a new ticket when the current one is close to running out (no-op for QR-code pairings).
+  static Future<void> refreshIfNeeded() async {
+    final s = Settings.current;
+    if (!Account.signedIn || s.connectedComputerId == null || s.ticketExpires == 0) return;
+    if (DateTime.now().millisecondsSinceEpoch < s.ticketExpires - 30 * 60 * 1000) return;
+    await reconnect();
   }
 }

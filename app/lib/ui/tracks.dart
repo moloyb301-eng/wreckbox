@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' as m show Row;
 
 import '../matcher.dart';
 import '../models.dart';
+import '../phone_sync.dart';
 import '../player.dart';
 import '../store.dart';
 import 'theme.dart';
@@ -383,6 +384,9 @@ class InspectorBody extends StatelessWidget {
           if (Platform.isWindows || Platform.isMacOS)
             PillButton(label: 'Show in folder', icon: Icons.folder_open, onTap: () => revealInFolder(r.state!.localPath!)),
         ],
+        // Phone: stream / download if the computer has it, otherwise ask it to find it on Soulseek. Rebuilt when the
+        // computer's track list arrives or changes.
+        if (r.status == TrackStatus.missing && PhoneSyncClient.instance?.base != null) _PhoneActions(id: r.id),
         if (r.status == TrackStatus.missing) PillButton(label: 'Ignore', icon: Icons.block, onTap: () => store.setStatus([r.id], TrackStatus.ignored)),
         if (r.status == TrackStatus.ignored) PillButton(label: 'Un-ignore', icon: Icons.undo, onTap: () => store.setStatus([r.id], TrackStatus.missing)),
       ]),
@@ -396,5 +400,57 @@ void revealInFolder(String path) {
     Process.run('explorer.exe', ['/select,', path]);
   } else if (Platform.isMacOS) {
     Process.run('open', ['-R', path]);
+  }
+}
+
+class _PhoneActions extends StatelessWidget {
+  final String id;
+  const _PhoneActions({required this.id});
+  @override
+  Widget build(BuildContext context) {
+    final c = PhoneSyncClient.instance!;
+    return ListenableBuilder(
+      listenable: c,
+      builder: (context, _) {
+        final item = c.crateById?[id];
+        if (c.crateById == null) return const PillButton(label: 'Connecting to computer…', icon: Icons.sync);
+        if (item == null) return _RequestButton(id: id);
+        return Wrap(spacing: 8, runSpacing: 8, children: [
+          if (!Player.instance.canPlay(id))
+            PillButton(label: 'Stream from computer', icon: Icons.play_arrow_rounded, style: PillStyle.primary, onTap: () => Player.instance.play(id)),
+          PillButton(label: 'Download to phone', icon: Icons.download, onTap: () => c.download([item], (_, _, _) {})),
+        ]);
+      },
+    );
+  }
+}
+
+class _RequestButton extends StatelessWidget {
+  final String id;
+  const _RequestButton({required this.id});
+  @override
+  Widget build(BuildContext context) {
+    final c = PhoneSyncClient.instance!;
+    return ListenableBuilder(
+      listenable: c,
+      builder: (context, _) {
+        final st = c.requests[id];
+        final label = switch (st) {
+          null => 'Ask computer to find it',
+          'queued' => 'Waiting for computer',
+          'not_found' => 'Not found — try again',
+          'failed' => 'Failed — try again',
+          'ready' => 'On its way',
+          _ => 'Searching…',
+        };
+        final canTap = st == null || st == 'not_found' || st == 'failed';
+        return PillButton(
+          label: label,
+          icon: Icons.travel_explore,
+          style: PillStyle.smart,
+          onTap: canTap ? () => c.request(id: id).catchError((_) => 'failed') : null,
+        );
+      },
+    );
   }
 }

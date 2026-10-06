@@ -1,5 +1,6 @@
 package local.wreckbox.wreckbox
 
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 
-class MainActivity : FlutterActivity()
+// AudioServiceActivity (a FlutterActivity) lets playback continue in the background with media controls.
+class MainActivity : AudioServiceActivity()

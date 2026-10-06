@@ -32,6 +32,7 @@ void main() {
     await Settings.load();
     // just_audio has native backends on Android / Mac; Windows plays through media_kit.
     JustAudioMediaKit.ensureInitialized(windows: true, linux: true, android: false, iOS: false, macOS: false);
+    await Player.initBackground(); // Android: keep playing with the screen off, lock-screen controls
     final store = LibraryStore();
     await store.load();
     Player.instance = Player(store);
@@ -62,13 +63,17 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
 
   /// Phone: refresh playlists from the account, find the computer's current address, learn what it can stream.
   Future<void> _phoneStartup() async {
-    if (Account.signedIn) {
-      try {
-        await Account.downloadLibrary(widget.store);
-        await AccountConnect.reconnect();
-      } catch (_) {}
-    }
-    if (Settings.current.pairedDesktop != null) await phoneClient.crate().catchError((_) => <Map<String, dynamic>>[]);
+    Player.instance.client = phoneClient;
+    // Playlists from the account and the connection to the computer don't depend on each other: do both at once.
+    final library = Account.signedIn ? Account.downloadLibrary(widget.store).catchError((_) => false) : Future.value(false);
+    try {
+      if (Account.signedIn) await AccountConnect.reconnect(); // fresh ticket + the computer's current address
+      if (Settings.current.pairedDesktop != null) {
+        if (!Account.signedIn) await PhoneSyncClient.preferLan();
+        unawaited(phoneClient.startLive()); // instant updates: new tracks, request progress, auto-sync
+      }
+    } catch (_) {}
+    await library;
   }
   UpdateInfo? update;
 

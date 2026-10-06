@@ -1,5 +1,6 @@
-// WreckBox account: email + password sign-in, library sync through the account, and finding your computers
-// from anywhere (they register their tunnel address; see tunnel.dart).
+// WreckBox account: email + password or Google sign-in, library sync through the account, and finding your
+// computers from anywhere (they register their tunnel address; see tunnel.dart). Phones reach a computer with a
+// short-lived ticket the account service signs for it — never the computer's own secret.
 //
 // The password never leaves the device: it's turned into a key with PBKDF2-HMAC-SHA256 (200,000 rounds, salted
 // with the email) and only that key is sent. The server stores a salted hash of the key.
@@ -12,6 +13,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 
 import 'config.dart';
@@ -28,9 +30,9 @@ class AccountException implements Exception {
 
 class RemoteComputer {
   final String id, name, platform;
-  final String? url, syncToken;
+  final String? url;
   final DateTime lastSeen;
-  RemoteComputer(this.id, this.name, this.platform, this.url, this.syncToken, this.lastSeen);
+  RemoteComputer(this.id, this.name, this.platform, this.url, this.lastSeen);
   /// Computers check in every few minutes while sharing.
   bool get online => url != null && DateTime.now().difference(lastSeen) < const Duration(minutes: 12);
 }
@@ -198,12 +200,42 @@ class Account {
     final all = [
       for (final d in (j['devices'] as List? ?? const []))
         if (d['platform'] != 'android' && d['platform'] != 'ios')
-          RemoteComputer(d['id'], d['name'] ?? 'Computer', d['platform'] ?? '', d['url'], d['syncToken'],
+          RemoteComputer(d['id'], d['name'] ?? 'Computer', d['platform'] ?? '', d['url'],
               DateTime.fromMillisecondsSinceEpoch(d['lastSeen'] ?? 0).add(skew)),
     ];
     // An offline entry with the same name as an online one is an old registration of the same computer.
     final onlineNames = {for (final c in all) if (c.online) c.name};
     return all.where((c) => c.online || !onlineNames.contains(c.name)).toList();
+  }
+
+  /// Phone: a ticket to reach `computerId` for the next few hours: {url, ticket, expires}.
+  static Future<Map<String, dynamic>> ticket(String computerId) =>
+      _call('POST', '/v1/devices/${Uri.encodeComponent(computerId)}/ticket');
+
+  /// Phone: ask an offline computer for a track; it picks the request up when it's back.
+  static Future<void> queueRequest(String computerId, {String? id, String? artist, String? title}) =>
+      _call('POST', '/v1/requests', {'device': computerId, 'id': id, 'artist': artist, 'title': title});
+
+  // MARK: Google
+
+  /// Google sign-in runs on the account service (no Google keys in the app). The app gets a one-time code back,
+  /// which only works together with a secret that never left this device (PKCE).
+  static Future<void> signInWithGoogle() async {
+    final r = Random.secure();
+    final verifier = base64Url.encode(List.generate(32, (_) => r.nextInt(256))).replaceAll('=', '');
+    final challenge = base64Url.encode(sha256.convert(utf8.encode(verifier)).bytes).replaceAll('=', '');
+    final start = Uri.parse('$api/v1/auth/google/start').replace(queryParameters: {'redirect': 'wreckbox://auth', 'challenge': challenge});
+    final Uri back;
+    try {
+      back = Uri.parse(await FlutterWebAuth2.authenticate(url: start.toString(), callbackUrlScheme: 'wreckbox'));
+    } catch (_) {
+      throw AccountException('Sign-in cancelled.');
+    }
+    final err = back.queryParameters['error'];
+    if (err != null) throw AccountException(err == 'cancelled' || err == 'access_denied' ? 'Sign-in cancelled.' : 'Google sign-in failed ($err).');
+    final code = back.queryParameters['code'];
+    if (code == null) throw AccountException('Google sign-in failed.');
+    await _signedIn(await _call('POST', '/v1/auth/exchange', {'code': code, 'verifier': verifier}));
   }
 
   /// Computer: announce (or refresh) this computer's tunnel address.

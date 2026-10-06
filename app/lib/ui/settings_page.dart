@@ -14,6 +14,7 @@ import '../csv_import.dart';
 import '../engine.dart';
 import '../paths.dart';
 import '../services.dart';
+import '../phone_sync.dart';
 import '../settings.dart';
 import '../soulseek.dart';
 import '../spotify.dart';
@@ -103,6 +104,23 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       );
 
+  Widget _qualityRow(String label, String value, void Function(String) set) => Row(children: [
+        Expanded(child: Text(label, style: T.ui(13.5, FontWeight.w600))),
+        DropdownButton<String>(
+          value: value,
+          dropdownColor: T.bgRaised,
+          style: T.ui(13, FontWeight.w600),
+          underline: const SizedBox(),
+          items: [for (final e in PhoneSyncClient.qualities.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+          onChanged: (v) async {
+            if (v == null) return;
+            set(v);
+            await Settings.current.save();
+            setState(() {});
+          },
+        ),
+      ]);
+
   Widget section(String title, List<Widget> children, {bool smart = false}) => Padding(
         padding: const EdgeInsets.only(bottom: 16),
         child: Glass(
@@ -140,6 +158,15 @@ class _SettingsPageState extends State<SettingsPage> {
       const SizedBox(height: 18),
       AccountSection(store: widget.store, onChanged: () => setState(() {})),
       const SizedBox(height: 16),
+      if (!desktop)
+        section('Streaming quality', [
+          Text('Tracks you play from your computer, and tracks you bring over. Lower quality starts faster and uses less data; FLAC is the original file.',
+              style: T.ui(13, FontWeight.w400, T.text2)),
+          const SizedBox(height: 8),
+          _qualityRow('On Wi-Fi', s.qualityWifi, (v) => s.qualityWifi = v),
+          _qualityRow('On mobile data', s.qualityMobile, (v) => s.qualityMobile = v),
+          _qualityRow('Downloads to phone', s.downloadQuality, (v) => s.downloadQuality = v),
+        ]),
       section('Import playlists', smart: widget.store.library == null, [
         Text('Bring in your Spotify and YouTube playlists as CSV files — no accounts or developer keys needed. Re-import any time; a playlist with the same name is replaced.',
             style: T.ui(13, FontWeight.w400, T.text2)),

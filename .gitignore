@@ -16,3 +16,5 @@ secrets/
 # Not for the public repo
 bug-reports/
 app/test/goldens/
+
+api/.wrangler/
