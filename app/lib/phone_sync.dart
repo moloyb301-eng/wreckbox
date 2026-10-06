@@ -22,6 +22,7 @@ import 'account.dart';
 import 'config.dart';
 import 'models.dart';
 import 'player.dart';
+import 'remote_playback.dart';
 import 'paths.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -240,7 +241,9 @@ class PhoneSyncClient extends ChangeNotifier {
   }
 
   Map<String, String> get _headers => authHeaders();
-  String? get base => Settings.current.pairedDesktop;
+  /// The computer over a direct Wi-Fi link while one is open (direct_link.dart), else the paired address.
+  String? directBase;
+  String? get base => directBase ?? Settings.current.pairedDesktop;
 
   /// On Wi-Fi the Wi-Fi quality, on mobile data the mobile one.
   static Future<String> streamQuality() async {
@@ -258,6 +261,17 @@ class PhoneSyncClient extends ChangeNotifier {
     if (r.statusCode != 200) throw Exception('computer said ${r.statusCode}');
     await writeAtomic(AppPaths.libraryFile, r.body);
     await store.load();
+  }
+
+  /// The computer's library changed (new playlists or tracks from its Spotify sync): take it, so playlists here
+  /// match. `builtAt` from the event saves a download when nothing changed.
+  Future<void> _refreshLibrary({String? builtAt}) async {
+    final mine = store.library?.builtAt;
+    final theirs = builtAt == null ? null : DateTime.tryParse(builtAt);
+    if (mine != null && theirs != null && !theirs.isAfter(mine)) return;
+    try {
+      await adoptLibrary();
+    } catch (_) {}
   }
 
   Future<List<Map<String, dynamic>>> crate() async {
@@ -290,6 +304,8 @@ class PhoneSyncClient extends ChangeNotifier {
             await crate(); // catch up on anything missed while disconnected
             _seq = (await _poll(-1))['seq'] as int;
             unawaited(_autoSync());
+            unawaited(_refreshLibrary());
+            unawaited(PlaybackSync.instance.fetch());
           }
           final j = await _poll(_seq);
           if (!live) {
@@ -358,6 +374,10 @@ class PhoneSyncClient extends ChangeNotifier {
         Player.instance.remoteIds = map.keys.toSet();
         notifyListeners();
         _autoSync();
+      case 'playback' || 'playback-command':
+        PlaybackSync.instance.onEvent(event, j);
+      case 'library':
+        _refreshLibrary(builtAt: j['builtAt'] as String?);
       case 'request':
         final id = j['id'] as String;
         requests[id] = j['status'] as String;
@@ -447,38 +467,49 @@ class PhoneSyncClient extends ChangeNotifier {
     }
   }
 
-  /// Downloads `items` (from crate()) the phone doesn't have yet, at `quality` (default: the download setting).
-  /// `progress(done, total, name)`.
-  Future<int> download(List<Map<String, dynamic>> items, void Function(int, int, String) progress, {String? quality}) async {
+  /// Set to stop download() after the files in flight.
+  bool cancelDownload = false;
+  /// Bytes received by the current download(), for speed and time left.
+  int bytesDone = 0;
+
+  /// Downloads `items` (from crate()) the phone doesn't have yet, at `quality` (default: the download setting),
+  /// `parallel` at a time. A FLAC cut off half-way picks up where it stopped. `progress(done, total, name)`.
+  Future<int> download(List<Map<String, dynamic>> items, void Function(int, int, String) progress,
+      {String? quality, int parallel = 1}) async {
     await AccountConnect.refreshIfNeeded();
     final q = quality ?? Settings.current.downloadQuality;
-    var done = 0;
+    cancelDownload = false;
+    bytesDone = 0;
+    var done = 0, failedInARow = 0;
+    final todo = [...items];
     final client = http.Client();
-    try {
-      for (final item in items) {
-        final id = item['id'] as String;
-        final t = store.track(id);
+    await AppPaths.tracks.create(recursive: true);
+    Future<void> worker() async {
+      while (todo.isNotEmpty && !cancelDownload && failedInARow < 6) {
+        final item = todo.removeAt(0);
+        final t = store.track(item['id'] as String);
         if (t == null) continue;
         progress(done, items.length, t.title);
-        final req = http.Request('GET', Uri.parse('$base/file/${Uri.encodeComponent(id)}?q=$q'))..headers.addAll(_headers);
-        final res = await client.send(req);
-        if (res.statusCode != 200) continue;
-        // A smaller copy comes back as AAC (.m4a); the original keeps its own format.
-        final ext = (res.headers['content-type'] ?? '') == 'audio/mp4' && item['ext'] != '.m4a' && item['ext'] != '.alac' ? '.m4a' : item['ext'];
-        final dest = p.join(AppPaths.tracks.path, '${t.fileName}$ext');
-        await AppPaths.tracks.create(recursive: true);
-        final tmp = File('$dest.part');
-        await res.stream.pipe(tmp.openWrite());
-        await tmp.rename(dest);
-        final a = item['analysis'];
-        if (a is Map) {
-          final st = await File(dest).stat();
-          store.analysis[dest] = FileAnalysis.fromJson({...Map<String, dynamic>.from(a), 'path': dest, 'sizeBytes': st.size, 'modified': isoSeconds(st.modified)});
+        for (var attempt = 0; attempt < 3 && !cancelDownload; attempt++) {
+          try {
+            if (await _copyOne(client, item, t, q)) {
+              done++;
+              failedInARow = 0;
+              if (done % 25 == 0) await store.save(); // a long copy that's interrupted keeps what it got
+            }
+            break;
+          } catch (e) {
+            lastError = '$e';
+            if (attempt == 2) failedInARow++;
+            await Future.delayed(const Duration(seconds: 2));
+          }
         }
-        store.state.tracks[id] = TrackState(status: TrackStatus.downloaded, localPath: dest, source: 'phone-sync');
-        done++;
-        store.changed();
+        progress(done, items.length, t.title);
       }
+    }
+
+    try {
+      await Future.wait([for (var i = 0; i < max(1, parallel); i++) worker()]);
     } finally {
       client.close();
     }
@@ -489,5 +520,49 @@ class PhoneSyncClient extends ChangeNotifier {
       store.changed();
     }
     return done;
+  }
+
+  Future<bool> _copyOne(http.Client client, Map<String, dynamic> item, LibraryTrack t, String q) async {
+    final id = item['id'] as String;
+    final part = File(p.join(AppPaths.tracks.path, '${t.fileName}.$q.part'));
+    // Only originals resume: a smaller copy could differ from the one the first part came from.
+    final have = q == 'flac' && await part.exists() ? await part.length() : 0;
+    final req = http.Request('GET', Uri.parse('$base/file/${Uri.encodeComponent(id)}?q=$q'))..headers.addAll(_headers);
+    if (have > 0) req.headers['range'] = 'bytes=$have-';
+    final res = await client.send(req).timeout(const Duration(seconds: 30));
+    if (res.statusCode == 416) {
+      await part.delete();
+      throw Exception('restart $id');
+    }
+    if (res.statusCode != 200 && res.statusCode != 206) {
+      await res.stream.drain<void>();
+      return false;
+    }
+    // A smaller copy comes back as AAC (.m4a); the original keeps its own format.
+    final ext = (res.headers['content-type'] ?? '') == 'audio/mp4' && item['ext'] != '.m4a' && item['ext'] != '.alac' ? '.m4a' : item['ext'];
+    final dest = p.join(AppPaths.tracks.path, '${t.fileName}$ext');
+    final sink = part.openWrite(mode: res.statusCode == 206 ? FileMode.append : FileMode.write);
+    var got = 0;
+    try {
+      // A link that goes quiet for 20 s is gone; the retry resumes.
+      await for (final chunk in res.stream.timeout(const Duration(seconds: 20))) {
+        sink.add(chunk);
+        got += chunk.length;
+        bytesDone += chunk.length;
+      }
+    } finally {
+      await sink.close();
+    }
+    final want = res.contentLength;
+    if (want != null && got < want) throw Exception('cut off after $got of $want bytes');
+    await part.rename(dest);
+    final a = item['analysis'];
+    if (a is Map) {
+      final st = await File(dest).stat();
+      store.analysis[dest] = FileAnalysis.fromJson({...Map<String, dynamic>.from(a), 'path': dest, 'sizeBytes': st.size, 'modified': isoSeconds(st.modified)});
+    }
+    store.state.tracks[id] = TrackState(status: TrackStatus.downloaded, localPath: dest, source: 'phone-sync');
+    store.changed();
+    return true;
   }
 }

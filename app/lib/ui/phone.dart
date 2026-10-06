@@ -2,6 +2,7 @@
 // The phone app is a companion: analysis, Spotify sync, organising downloads for Rekordbox, cloud and
 // computer → phone syncing. Soulseek and the heavy library tools stay on the computer.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../direct_link.dart';
 import '../models.dart';
 import '../paths.dart';
 import '../phone_sync.dart';
@@ -19,6 +21,7 @@ import 'bug_report.dart';
 import 'account_ui.dart';
 import '../account.dart';
 import 'player_bar.dart';
+import 'playlists.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'tracks.dart';
@@ -143,12 +146,15 @@ class _PhoneShellState extends State<PhoneShell> {
       );
     }
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(children: [
         TabBar(
           labelStyle: T.ui(13, FontWeight.w600),
           indicatorColor: T.lilac,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
           tabs: [
+            Tab(text: 'Playlists ${store.library!.playlists.length}'),
             Tab(text: 'On phone ${store.count(TrackStatus.downloaded)}'),
             Tab(text: 'Missing ${store.count(TrackStatus.missing)}'),
             const Tab(text: 'All'),
@@ -157,6 +163,7 @@ class _PhoneShellState extends State<PhoneShell> {
         const SizedBox(height: 10),
         Expanded(
           child: TabBarView(children: [
+            PlaylistsView(store: store),
             TrackListView(store: store, filter: ListFilter.downloaded, compact: true),
             TrackListView(store: store, filter: ListFilter.missing, compact: true),
             TrackListView(store: store, compact: true),
@@ -256,6 +263,108 @@ class _ComputerPageState extends State<_ComputerPage> {
   final reqArtist = TextEditingController(), reqTitle = TextEditingController();
   final picked = <String>{}; // playlist names
   bool scanning = false, working = false;
+  // "Get everything": progress of the big copy.
+  bool copying = false;
+  String copyLine = '', copyVia = '';
+  int copyDone = 0, copyTotal = 0, copyBytes = 0;
+  final copyClock = Stopwatch();
+  Timer? copyTick;
+
+  static String gb(num bytes) => bytes >= 1e9 ? '${(bytes / 1e9).toStringAsFixed(1)} GB' : '${(bytes / 1e6).round()} MB';
+
+  /// Copies every track the computer has and this phone doesn't — over the shared Wi-Fi, or a direct link.
+  Future<void> _getEverything(List<Map<String, dynamic>> items) async {
+    final c = widget.client;
+    setState(() {
+      copying = true;
+      copyDone = 0;
+      copyTotal = items.length;
+      copyBytes = Settings.current.downloadQuality == 'flac' ? items.fold<int>(0, (a, i) => a + ((i['size'] as num?)?.toInt() ?? 0)) : 0;
+      copyVia = '';
+    });
+    c.stopLive();
+    try {
+      final via = await DirectLink.open(c, (s) => setState(() => copyLine = s));
+      copyVia = via == 'direct' ? 'direct Wi-Fi link' : 'Wi-Fi';
+      await DirectLink.keepAwake(true);
+      copyClock
+        ..reset()
+        ..start();
+      copyTick = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+      final n = await c.download(items, (d, t, name) {
+        copyDone = d;
+        copyLine = name;
+      }, parallel: 3);
+      if (mounted) {
+        setState(() => status = c.cancelDownload
+            ? 'Stopped after $n tracks.'
+            : 'Copied $n of ${items.length} tracks over the $copyVia in ${(copyClock.elapsed.inSeconds / 60).toStringAsFixed(1)} min.'
+                '${n < items.length && c.lastError != null ? ' Last problem: ${c.lastError}' : ''}');
+      }
+    } catch (e) {
+      if (mounted) setState(() => status = '$e'.replaceFirst('Exception: ', ''));
+    } finally {
+      copyTick?.cancel();
+      copyClock.stop();
+      await DirectLink.keepAwake(false);
+      await DirectLink.close(c);
+      if (mounted) setState(() => copying = false);
+      if (Account.signedIn && Settings.current.connectedComputerId != null) {
+        try {
+          await AccountConnect.reconnect(); // the computer's tunnel address may have changed while it was offline
+        } catch (_) {}
+      }
+      c.startLive();
+    }
+  }
+
+  Widget _everythingCard(Map<String, Map<String, dynamic>> available, Set<String> have) {
+    final missing = [for (final e in available.entries) if (!have.contains(e.key) && widget.store.track(e.key) != null) e.value];
+    final size = missing.fold<int>(0, (a, i) => a + ((i['size'] as num?)?.toInt() ?? 0));
+    final secs = copyClock.elapsedMilliseconds / 1000;
+    final speed = secs > 2 ? widget.client.bytesDone / secs : 0.0;
+    final flac = Settings.current.downloadQuality == 'flac';
+    final left = flac && speed > 0 ? (copyBytes - widget.client.bytesDone) / speed : (copyDone > 0 ? secs / copyDone * (copyTotal - copyDone) : 0);
+    return Glass(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const DotLabel('Everything on your computer', color: T.text),
+        const SizedBox(height: 6),
+        Text('${available.length} tracks there · ${missing.length} not on this phone yet${flac ? ' (${gb(size)})' : ''}',
+            style: T.ui(13, FontWeight.w600, T.text2)),
+        const SizedBox(height: 4),
+        Text('On the same Wi-Fi it copies over that. Otherwise the phone makes a direct Wi-Fi link and your computer joins it '
+            '— its internet pauses until the copy is done.', style: T.ui(12, FontWeight.w400, T.text3)),
+        const SizedBox(height: 10),
+        if (copying) ...[
+          LinearProgressIndicator(
+            value: copyTotal == 0 ? null : (flac && copyBytes > 0 ? widget.client.bytesDone / copyBytes : copyDone / copyTotal).clamp(0.0, 1.0),
+            color: T.lilac,
+            backgroundColor: T.text3.withValues(alpha: 0.2),
+          ),
+          const SizedBox(height: 8),
+          Text(copyClock.isRunning
+              ? '$copyDone / $copyTotal · ${gb(widget.client.bytesDone)}${flac ? ' of ${gb(copyBytes)}' : ''} · ${(speed / 1e6).toStringAsFixed(1)} MB/s'
+                  '${left > 0 ? ' · ~${(left / 60).ceil()} min left' : ''} · $copyVia'
+              : '', style: T.ui(12.5, FontWeight.w600)),
+          Text(copyLine, maxLines: 2, overflow: TextOverflow.ellipsis, style: T.ui(12, FontWeight.w400, T.text2)),
+          const SizedBox(height: 8),
+          PillButton(label: 'Stop', icon: Icons.stop, onTap: () => widget.client.cancelDownload = true),
+        ] else
+          Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            PillButton(
+              label: 'Get all ${missing.length} tracks',
+              icon: Icons.download_for_offline,
+              style: PillStyle.smart,
+              onTap: missing.isEmpty || working ? null : () => _getEverything(missing),
+            ),
+            _qualityPicker(),
+          ]),
+      ]),
+    );
+  }
 
   Future<void> _load() async {
     setState(() => status = 'Connecting…');
@@ -460,6 +569,8 @@ class _ComputerPageState extends State<_ComputerPage> {
       ),
       if (crate != null) ...[
         const SizedBox(height: 12),
+        _everythingCard(available, have),
+        const SizedBox(height: 12),
         Glass(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -496,7 +607,7 @@ class _ComputerPageState extends State<_ComputerPage> {
           label: working ? 'Downloading…' : 'Download ${unique.length} tracks',
           icon: Icons.download,
           style: PillStyle.smart,
-          onTap: working || unique.isEmpty
+          onTap: working || copying || unique.isEmpty
               ? null
               : () async {
                   setState(() => working = true);

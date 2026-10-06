@@ -78,6 +78,10 @@ class Player extends ChangeNotifier {
     });
   }
 
+  /// The whole queue (the part handed to the player + the rest) and where we are in it, for other devices.
+  List<String> get fullQueue => [...queue, ..._rest];
+  int get fullIndex => index;
+
   int get index => _desktop ? _desktopIndex : (audio.currentIndex ?? -1);
   String? get currentId => index >= 0 && index < queue.length ? queue[index] : null;
   bool get playing => audio.playing;

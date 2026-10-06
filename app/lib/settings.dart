@@ -28,7 +28,8 @@ class Settings {
   String? remoteDesktop;
   int ticketExpires = 0; // ms since epoch; 0 = a pairing token from the QR code, which doesn't expire
   // Phone: quality to stream / download at — flac (the original), high, med, low.
-  String qualityWifi = 'flac', qualityMobile = 'med', downloadQuality = 'flac';
+  // Best quality by default (the user's rule); mobile data gets High (256k AAC) rather than the original FLAC.
+  String qualityWifi = 'flac', qualityMobile = 'high', downloadQuality = 'flac';
   List<String> autoSyncPlaylists = []; // phone: bring new tracks of these playlists over automatically
 
   static Settings current = Settings();
@@ -62,7 +63,8 @@ class Settings {
         ..remoteDesktop = j['remoteDesktop']
         ..ticketExpires = j['ticketExpires'] ?? 0
         ..qualityWifi = j['qualityWifi'] ?? 'flac'
-        ..qualityMobile = j['qualityMobile'] ?? 'med'
+        // Settings saved before 0.4 still hold the old default (Medium) without the user having picked it.
+        ..qualityMobile = j['qualityV'] == null && (j['qualityMobile'] ?? 'med') == 'med' ? 'high' : j['qualityMobile'] ?? 'high'
         ..downloadQuality = j['downloadQuality'] ?? 'flac'
         ..autoSyncPlaylists = List<String>.from(j['autoSyncPlaylists'] ?? const []);
     } catch (_) {
@@ -99,6 +101,7 @@ class Settings {
           'ticketExpires': ticketExpires,
           'qualityWifi': qualityWifi,
           'qualityMobile': qualityMobile,
+          'qualityV': 2,
           'downloadQuality': downloadQuality,
           'autoSyncPlaylists': autoSyncPlaylists,
         }),
