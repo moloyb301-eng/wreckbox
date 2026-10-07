@@ -13,6 +13,7 @@ import '../phone_sync.dart';
 import '../player.dart';
 import '../store.dart';
 import 'theme.dart';
+import 'vpn_prompt.dart';
 
 typedef HRow = m.Row;
 
@@ -470,7 +471,11 @@ class _RequestButton extends StatelessWidget {
           label: label,
           icon: Icons.travel_explore,
           style: PillStyle.smart,
-          onTap: canTap ? () => c.request(id: id).catchError((_) => 'failed') : null,
+          onTap: canTap
+              ? () async {
+                  if (await confirmVpn(context)) await c.request(id: id).catchError((_) => 'failed');
+                }
+              : null,
         );
       },
     );

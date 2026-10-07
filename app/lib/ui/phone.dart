@@ -24,6 +24,7 @@ import 'player_bar.dart';
 import 'playlists.dart';
 import 'settings_page.dart';
 import 'theme.dart';
+import 'vpn_prompt.dart';
 import 'tracks.dart';
 
 class PhoneShell extends StatefulWidget {
@@ -477,6 +478,7 @@ class _ComputerPageState extends State<_ComputerPage> {
     final artist = reqArtist.text.trim(), title = reqTitle.text.trim();
     if (artist.isEmpty || title.isEmpty) return;
     try {
+      if (!await confirmVpn(context)) return;
       final st = await widget.client.request(artist: artist, title: title);
       reqArtist.clear();
       reqTitle.clear();

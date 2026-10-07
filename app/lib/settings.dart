@@ -37,6 +37,7 @@ class Settings {
   List<double> eqGains = List.filled(10, 0);
   // Phone: the last queue and where it was, so play after a restart (or from the widget) resumes it.
   bool shuffle = false;
+  String? vpnAcknowledged; // the day the VPN reminder was quieted ("Don't ask again today")
   List<String> lastQueue = [];
   int lastIndex = -1, lastPositionMs = 0;
 
@@ -86,6 +87,7 @@ class Settings {
         ..visualMode = j['visualMode'] ?? 'matrix'
         ..eqGains = _tenBands(j['eqGains'])
         ..shuffle = j['shuffle'] ?? false
+        ..vpnAcknowledged = j['vpnAcknowledged']
         ..lastQueue = List<String>.from(j['lastQueue'] ?? const [])
         ..lastIndex = j['lastIndex'] ?? -1
         ..lastPositionMs = j['lastPositionMs'] ?? 0;
@@ -131,6 +133,7 @@ class Settings {
           'visualMode': visualMode,
           'eqGains': eqGains,
           'shuffle': shuffle,
+          'vpnAcknowledged': vpnAcknowledged,
           'lastQueue': lastQueue,
           'lastIndex': lastIndex,
           'lastPositionMs': lastPositionMs,
