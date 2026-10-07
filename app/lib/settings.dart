@@ -31,6 +31,10 @@ class Settings {
   // Best quality by default (the user's rule); mobile data gets High (256k AAC) rather than the original FLAC.
   String qualityWifi = 'flac', qualityMobile = 'high', downloadQuality = 'flac';
   List<String> autoSyncPlaylists = []; // phone: bring new tracks of these playlists over automatically
+  // Phone EQ (10 bands, like the computer's; mapped onto the phone's own bands) and the full-screen player's look.
+  bool eqOn = true;
+  String eqPreset = 'Flat', visualMode = 'matrix';
+  List<double> eqGains = List.filled(10, 0);
 
   static Settings current = Settings();
 
@@ -66,7 +70,11 @@ class Settings {
         // Settings saved before 0.4 still hold the old default (Medium) without the user having picked it.
         ..qualityMobile = j['qualityV'] == null && (j['qualityMobile'] ?? 'med') == 'med' ? 'high' : j['qualityMobile'] ?? 'high'
         ..downloadQuality = j['downloadQuality'] ?? 'flac'
-        ..autoSyncPlaylists = List<String>.from(j['autoSyncPlaylists'] ?? const []);
+        ..autoSyncPlaylists = List<String>.from(j['autoSyncPlaylists'] ?? const [])
+        ..eqOn = j['eqOn'] ?? true
+        ..eqPreset = j['eqPreset'] ?? 'Flat'
+        ..visualMode = j['visualMode'] ?? 'matrix'
+        ..eqGains = (j['eqGains'] as List?)?.map((e) => (e as num).toDouble()).toList() ?? List.filled(10, 0);
     } catch (_) {
       current = Settings();
     }
@@ -104,6 +112,10 @@ class Settings {
           'qualityV': 2,
           'downloadQuality': downloadQuality,
           'autoSyncPlaylists': autoSyncPlaylists,
+          'eqOn': eqOn,
+          'eqPreset': eqPreset,
+          'visualMode': visualMode,
+          'eqGains': eqGains,
         }),
       );
 }

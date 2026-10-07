@@ -19,6 +19,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'eq.dart';
 import 'models.dart';
 import 'phone_sync.dart';
 import 'settings.dart';
@@ -39,7 +40,8 @@ class Player extends ChangeNotifier {
   }
 
   final LibraryStore store;
-  final AudioPlayer audio = AudioPlayer();
+  // Android: through the EQ (eq.dart).
+  final AudioPlayer audio = Platform.isAndroid ? AudioPlayer(audioPipeline: AudioPipeline(androidAudioEffects: [PhoneEQ.instance.android])) : AudioPlayer();
   List<String> queue = [];
   String? error;
   String? quality; // what the streamed tracks in this queue were asked for
@@ -147,6 +149,7 @@ class Player extends ChangeNotifier {
       queue = queue.take(_window).toList();
       final sources = [for (final t in queue) await _source(t, quality!)];
       await audio.setAudioSources(sources, initialIndex: 0, preload: true);
+      unawaited(PhoneEQ.instance.apply()); // the equaliser's bands are known once something is loaded
       notifyListeners();
       unawaited(audio.play());
     } catch (e) {

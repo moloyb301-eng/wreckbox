@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../player.dart';
 import '../remote_playback.dart';
+import 'full_player.dart';
 import '../store.dart';
 import 'theme.dart';
 
@@ -78,7 +79,10 @@ class PlayerBar extends StatelessWidget {
             solid: true,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: compact
-                ? Column(mainAxisSize: MainAxisSize.min, children: [Row(children: [Expanded(child: info), controls, DevicesButton(store: store)]), seek])
+                ? Column(mainAxisSize: MainAxisSize.min, children: [
+                    Row(children: [Expanded(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => openFullPlayer(context, store), child: info)), controls, DevicesButton(store: store)]),
+                    seek,
+                  ])
                 : Row(children: [Expanded(flex: 3, child: info), controls, const SizedBox(width: 12), Expanded(flex: 4, child: seek)]),
           ),
         );
@@ -100,7 +104,7 @@ class PlayerBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(children: [
-            if (r != null) Artwork(track: r.track, store: store, size: 40, radius: 8),
+            if (r != null) GestureDetector(onTap: () => openFullPlayer(context, store), child: Artwork(track: r.track, store: store, size: 40, radius: 8)),
             const SizedBox(width: 10),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [

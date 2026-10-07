@@ -12,8 +12,14 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
+import android.media.audiofx.Visualizer
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import kotlin.math.hypot
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.pow
 import java.security.SecureRandom
 
 // AudioServiceActivity (a FlutterActivity) lets playback continue in the background with media controls.
@@ -25,8 +31,34 @@ class MainActivity : AudioServiceActivity() {
     private var channel: WifiP2pManager.Channel? = null
     private val main = Handler(Looper.getMainLooper())
 
+    private var visualizer: Visualizer? = null
+    private var fftSink: EventChannel.EventSink? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        // The home-screen widget: what's playing (Dart → widget). Its buttons come back on the same channel.
+        MethodChannel(messenger, "wreckbox/widget").setMethodCallHandler { call, result ->
+            if (call.method == "update") PlayerWidget.update(applicationContext, call.arguments as Map<*, *>)
+            result.success(null)
+        }
+        // Spectrum of what this phone plays, for the full-screen visualiser.
+        EventChannel(messenger, "wreckbox/visualizer/fft").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(args: Any?, sink: EventChannel.EventSink) { fftSink = sink }
+            override fun onCancel(args: Any?) { fftSink = null }
+        })
+        MethodChannel(messenger, "wreckbox/visualizer").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> try {
+                    startVisualizer(call.arguments as Int)
+                    result.success(null)
+                } catch (e: Exception) {
+                    result.error("visualizer", e.message, null)
+                }
+                "stop" -> { stopVisualizer(); result.success(null) }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "wreckbox/direct").setMethodCallHandler { call, result ->
             when (call.method) {
                 "wifiOn" -> result.success((applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager).isWifiEnabled)
@@ -131,7 +163,41 @@ class MainActivity : AudioServiceActivity() {
         return (1..12).map { chars[r.nextInt(chars.length)] }.joinToString("")
     }
 
+    private fun startVisualizer(session: Int) {
+        stopVisualizer()
+        val v = Visualizer(session)
+        v.captureSize = Visualizer.getCaptureSizeRange()[1]
+        val bands = 32
+        v.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+            override fun onWaveFormDataCapture(vis: Visualizer, data: ByteArray, rate: Int) {}
+            override fun onFftDataCapture(vis: Visualizer, fft: ByteArray, rate: Int) {
+                val n = fft.size / 2
+                val binHz = vis.samplingRate / 1000.0 / 2 / n      // samplingRate is in mHz
+                val out = DoubleArray(bands)
+                for (b in 0 until bands) {
+                    val lo = 40 * 400.0.pow(b / bands.toDouble())
+                    val hi = 40 * 400.0.pow((b + 1) / bands.toDouble())
+                    val i0 = max(1, (lo / binHz).toInt())
+                    val i1 = max(i0 + 1, minOf(n, (hi / binHz).toInt()))
+                    var peak = 0.0
+                    for (i in i0 until i1) peak = max(peak, hypot(fft[2 * i].toDouble(), fft[2 * i + 1].toDouble()))
+                    val db = 20 * log10(max(peak, 1e-3) / 128.0)
+                    out[b] = ((db + 48) / 48).coerceIn(0.0, 1.0)
+                }
+                fftSink?.success(out.toList())
+            }
+        }, Visualizer.getMaxCaptureRate(), false, true)
+        v.enabled = true
+        visualizer = v
+    }
+
+    private fun stopVisualizer() {
+        visualizer?.run { enabled = false; release() }
+        visualizer = null
+    }
+
     override fun onDestroy() {
+        stopVisualizer()
         stop()
         super.onDestroy()
     }

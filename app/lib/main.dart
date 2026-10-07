@@ -9,6 +9,7 @@ import 'paths.dart';
 import 'phone_sync.dart';
 import 'player.dart';
 import 'remote_playback.dart';
+import 'widget_bridge.dart';
 import 'account.dart';
 import 'tunnel.dart';
 import 'ui/account_ui.dart';
@@ -66,6 +67,7 @@ class _WreckBoxAppState extends State<WreckBoxApp> with WidgetsBindingObserver {
   Future<void> _phoneStartup() async {
     Player.instance.client = phoneClient;
     PlaybackSync.instance.attach(phoneClient); // what plays where, controls for every device
+    WidgetBridge.start(widget.store); // the home-screen player widget
     // Playlists from the account and the connection to the computer don't depend on each other: do both at once.
     final library = Account.signedIn ? Account.downloadLibrary(widget.store).catchError((_) => false) : Future.value(false);
     try {

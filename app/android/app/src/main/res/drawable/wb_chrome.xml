@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brushed chrome body: bright top, dark band, bright, dark bottom; a light rim. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="30dp" />
+            <gradient android:angle="270" android:startColor="#FFF5F5F7" android:centerColor="#FFA4A7AE" android:endColor="#FF7E828A" android:type="linear" />
+            <stroke android:width="1.5dp" android:color="#FF5E6168" />
+        </shape>
+    </item>
+    <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="40dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <gradient android:angle="270" android:startColor="#80FFFFFF" android:endColor="#00FFFFFF" />
+        </shape>
+    </item>
+</layer-list>
