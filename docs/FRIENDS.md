@@ -12,7 +12,9 @@ once. If Play Protect warns about an unknown app: **More details → Install any
 If SmartScreen says "Windows protected your PC": **More info → Run anyway**. Allow **private networks** when asked
 (needed to send tracks to your phone).
 
-**Mac (Apple Silicon):** unzip, move WreckBox to Applications, then **right-click → Open** the first time.
+**Mac (Apple Silicon, macOS 13+):** download `WreckBox-mac-arm64.zip`, unzip, move WreckBox to Applications and open it.
+macOS blocks it the first time (it isn't signed by Apple): click **Done**, then **System Settings → Privacy & Security
+→ Open Anyway**. Full guide: INSTALL.md in the Mac app's repo.
 
 Your music lives in `Music/WreckBox` (Windows: `C:\Users\<you>\Music\WreckBox`).
 
@@ -53,7 +55,13 @@ and you can add more. Put your name in Settings so the developer knows who to as
 
 ## Optional: direct Spotify import
 
-Instead of CSV files you can import straight from Spotify, but Spotify only allows this for a developer key whose
-owner has **Premium**, and each key works for **up to 5 people** (the owner adds their Spotify emails under the
-app's *User Management* on developer.spotify.com). Ask whoever in the group set one up to add you, then paste
-that key's Client ID under **Settings → Spotify — direct**.
+Instead of CSV files you can import straight from **your own** Spotify. Nobody shares a Spotify account or
+developer key: each person makes their own (free, takes a minute), and it only ever sees their own playlists.
+
+1. Open **developer.spotify.com/dashboard**, log in with your Spotify account and click **Create app** (any name).
+2. Add the Redirect URIs `http://127.0.0.1:8888/callback` (computer) and `wreckbox://spotify-callback` (phone),
+   tick **Web API**, then **Save**.
+3. Copy the app's **Client ID** into **Settings → Spotify — direct** (on the Mac: **WreckBox → Setup…**).
+
+Spotify only lets developer apps run for accounts with **Premium**. Without Premium, use the CSV import above
+or add playlists from YouTube / YouTube Music links instead.
