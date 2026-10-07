@@ -35,8 +35,17 @@ class Settings {
   bool eqOn = true;
   String eqPreset = 'Flat', visualMode = 'matrix';
   List<double> eqGains = List.filled(10, 0);
+  // Phone: the last queue and where it was, so play after a restart (or from the widget) resumes it.
+  List<String> lastQueue = [];
+  int lastIndex = -1, lastPositionMs = 0;
 
   static Settings current = Settings();
+
+  /// A saved EQ curve, or flat if it's missing or not 10 bands.
+  static List<double> _tenBands(dynamic v) {
+    final l = (v is List) ? v.whereType<num>().map((e) => e.toDouble()).toList() : <double>[];
+    return l.length == 10 ? l : List.filled(10, 0);
+  }
 
   static Future<void> load() async {
     try {
@@ -74,7 +83,10 @@ class Settings {
         ..eqOn = j['eqOn'] ?? true
         ..eqPreset = j['eqPreset'] ?? 'Flat'
         ..visualMode = j['visualMode'] ?? 'matrix'
-        ..eqGains = (j['eqGains'] as List?)?.map((e) => (e as num).toDouble()).toList() ?? List.filled(10, 0);
+        ..eqGains = _tenBands(j['eqGains'])
+        ..lastQueue = List<String>.from(j['lastQueue'] ?? const [])
+        ..lastIndex = j['lastIndex'] ?? -1
+        ..lastPositionMs = j['lastPositionMs'] ?? 0;
     } catch (_) {
       current = Settings();
     }
@@ -116,6 +128,9 @@ class Settings {
           'eqPreset': eqPreset,
           'visualMode': visualMode,
           'eqGains': eqGains,
+          'lastQueue': lastQueue,
+          'lastIndex': lastIndex,
+          'lastPositionMs': lastPositionMs,
         }),
       );
 }

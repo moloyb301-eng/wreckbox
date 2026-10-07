@@ -65,59 +65,42 @@
                     android:contentDescription="@null"
                     android:scaleType="centerCrop" />
 
-                <LinearLayout
+                <!-- Title (dot-matrix) + artist, drawn by PlayerWidget: widgets can't use an app's own font. -->
+                <ImageView
+                    android:id="@+id/wb_titleimg"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="34dp"
                     android:layout_marginStart="7dp"
                     android:layout_weight="1"
+                    android:contentDescription="@null"
+                    android:scaleType="fitStart" />
+
+                <!-- Clock + status, on the right -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:gravity="end"
                     android:orientation="vertical">
 
-                    <TextView
-                        android:id="@+id/wb_title"
-                        android:layout_width="match_parent"
+                    <Chronometer
+                        android:id="@+id/wb_time"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:ellipsize="end"
-                        android:fontFamily="@font/doto"
-                        android:maxLines="1"
-                        android:text="WRECKBOX"
-                        android:textColor="#FFBB96DA"
-                        android:textSize="11sp" />
+                        android:fontFamily="monospace"
+                        android:textColor="#FFEFAF86"
+                        android:textSize="17sp"
+                        android:textStyle="bold" />
 
                     <TextView
-                        android:id="@+id/wb_artist"
-                        android:layout_width="match_parent"
+                        android:id="@+id/wb_status"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="Nothing playing"
-                        android:textColor="#99FFFFFF"
-                        android:textSize="10sp" />
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="bottom"
-                        android:orientation="horizontal">
-
-                        <Chronometer
-                            android:id="@+id/wb_time"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="@font/doto"
-                            android:textColor="#FFEFAF86"
-                            android:textSize="19sp" />
-
-                        <TextView
-                            android:id="@+id/wb_status"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="6dp"
-                            android:layout_marginBottom="3dp"
-                            android:fontFamily="@font/doto"
-                            android:text="STOP"
-                            android:textColor="#80FFFFFF"
-                            android:textSize="8sp" />
-                    </LinearLayout>
+                        android:fontFamily="monospace"
+                        android:gravity="end"
+                        android:text="STOP"
+                        android:textColor="#80FFFFFF"
+                        android:textSize="8sp" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -133,7 +116,7 @@
                 <ImageButton android:id="@+id/wb_stop" android:layout_width="38dp" android:layout_height="28dp" android:layout_marginStart="4dp" android:background="@drawable/wb_pill" android:contentDescription="Stop" android:padding="7dp" android:scaleType="fitCenter" android:src="@drawable/wb_ic_stop" />
                 <ImageButton android:id="@+id/wb_next" android:layout_width="38dp" android:layout_height="28dp" android:layout_marginStart="4dp" android:background="@drawable/wb_pill" android:contentDescription="Next" android:padding="5dp" android:scaleType="fitCenter" android:src="@drawable/wb_ic_next" />
 
-                <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+                <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
                 <ImageButton android:id="@+id/wb_tab_controls" android:layout_width="38dp" android:layout_height="28dp" android:background="@drawable/wb_pill" android:contentDescription="Controls drawer" android:padding="6dp" android:scaleType="fitCenter" android:src="@drawable/wb_ic_list" />
                 <ImageButton android:id="@+id/wb_tab_eq" android:layout_width="38dp" android:layout_height="28dp" android:layout_marginStart="4dp" android:background="@drawable/wb_pill" android:contentDescription="EQ drawer" android:padding="6dp" android:scaleType="fitCenter" android:src="@drawable/wb_ic_eq" />

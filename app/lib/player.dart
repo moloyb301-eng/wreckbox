@@ -71,6 +71,7 @@ class Player extends ChangeNotifier {
     });
     audio.currentIndexStream.listen((_) {
       notifyListeners();
+      _remember();
       _prepareAhead();
       _topUp();
     });
@@ -199,10 +200,31 @@ class Player extends ChangeNotifier {
   Future<void> toggle() async {
     if (audio.playing) {
       await audio.pause();
+      _remember();
+    } else if (currentId == null) {
+      await resume(); // nothing loaded (e.g. the widget after a restart): pick up the last queue
     } else {
       await audio.play();
     }
     notifyListeners();
+  }
+
+  /// Saves the queue and position, so play after a restart carries on where it was.
+  void _remember() {
+    if (_desktop || currentId == null) return;
+    Settings.current
+      ..lastQueue = fullQueue.take(500).toList()
+      ..lastIndex = index
+      ..lastPositionMs = audio.position.inMilliseconds;
+    Settings.current.save();
+  }
+
+  /// Plays the last saved queue from where it stopped. No-op when there's none.
+  Future<void> resume() async {
+    final s = Settings.current;
+    if (s.lastQueue.isEmpty || s.lastIndex < 0 || s.lastIndex >= s.lastQueue.length) return;
+    await play(s.lastQueue[s.lastIndex], list: s.lastQueue.sublist(s.lastIndex));
+    if (s.lastPositionMs > 0) await audio.seek(Duration(milliseconds: s.lastPositionMs));
   }
 
   Future<void> next() async {

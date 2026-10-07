@@ -12,6 +12,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -98,12 +100,11 @@ class PlayerWidget : AppWidgetProvider() {
             val title = p.getString("title", null)
 
             // LCD
-            v.setTextViewText(R.id.wb_title, (title ?: "WRECKBOX").uppercase())
-            v.setTextViewText(R.id.wb_artist, p.getString("artist", null) ?: "Nothing playing")
-            val pos = p.getLong("positionMs", 0)
+            v.setImageViewBitmap(R.id.wb_titleimg, titleImage(context, (title ?: "WreckBox").uppercase(), p.getString("artist", null) ?: "Nothing playing"))
+            val pos = if (title == null) 0 else p.getLong("positionMs", 0)
             val since = if (playing) System.currentTimeMillis() - p.getLong("wallMs", System.currentTimeMillis()) else 0
             v.setChronometer(R.id.wb_time, SystemClock.elapsedRealtime() - pos - since, null, playing)
-            v.setTextViewText(R.id.wb_status, "${if (playing) "PLAY" else if (title == null) "STOP" else "PAUSE"}\n${p.getString("device", "PHONE")}")
+            v.setTextViewText(R.id.wb_status, "${if (playing) "PLAY" else if (title == null) "STOP" else "PAUSE"} · ${p.getString("device", "PHONE")}")
             val art = p.getString("art", null)?.let { path -> runCatching { decodeSmall(path) }.getOrNull() }
             if (art != null) v.setImageViewBitmap(R.id.wb_art, art) else v.setImageViewResource(R.id.wb_art, R.mipmap.ic_launcher)
             v.setImageViewResource(R.id.wb_play, if (playing) R.drawable.wb_ic_pause else R.drawable.wb_ic_play)
@@ -115,8 +116,11 @@ class PlayerWidget : AppWidgetProvider() {
             val drawer = p.getString("drawer", "") ?: ""
             v.setViewVisibility(R.id.wb_drawer_controls, if (drawer == "controls") View.VISIBLE else View.GONE)
             v.setViewVisibility(R.id.wb_drawer_eq, if (drawer == "eq") View.VISIBLE else View.GONE)
+            // The open drawer's tab is pressed in: dark with a lilac rim and icon.
             v.setImageViewResource(R.id.wb_tab_controls, if (drawer == "controls") R.drawable.wb_ic_list_lit else R.drawable.wb_ic_list)
             v.setImageViewResource(R.id.wb_tab_eq, if (drawer == "eq") R.drawable.wb_ic_eq_lit else R.drawable.wb_ic_eq)
+            v.setInt(R.id.wb_tab_controls, "setBackgroundResource", if (drawer == "controls") R.drawable.wb_pill_lit else R.drawable.wb_pill)
+            v.setInt(R.id.wb_tab_eq, "setBackgroundResource", if (drawer == "eq") R.drawable.wb_pill_lit else R.drawable.wb_pill)
             val eqOn = p.getBoolean("eqOn", true)
             v.setTextViewText(R.id.wb_eq_on, if (eqOn) "EQ ON" else "EQ OFF")
             v.setImageViewBitmap(R.id.wb_eq_curve, curve(p.getString("gains", "") ?: "", eqOn))
@@ -138,6 +142,34 @@ class PlayerWidget : AppWidgetProvider() {
             clicks.entries.forEachIndexed { n, (id, action) -> v.setOnClickPendingIntent(id, intent(context, action, n)) }
 
             manager.updateAppWidget(ids, v)
+        }
+
+        private var doto: Typeface? = null
+
+        /// Title in the app's dot-matrix font (lilac), artist under it (grey); cut with … to fit.
+        private fun titleImage(context: Context, title: String, artist: String): Bitmap {
+            val w = 640
+            val h = 76
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            if (doto == null && Build.VERSION.SDK_INT >= 26) doto = runCatching { context.resources.getFont(R.font.doto) }.getOrNull()
+            val t = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = doto ?: Typeface.MONOSPACE
+                textSize = 34f
+                color = Color.parseColor("#FFBB96DA")
+                isFakeBoldText = doto != null
+            }
+            val a = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f; color = Color.argb(160, 255, 255, 255) }
+            c.drawText(fit(title, t, w.toFloat()), 0f, 32f, t)
+            c.drawText(fit(artist, a, w.toFloat()), 0f, 68f, a)
+            return b
+        }
+
+        private fun fit(s: String, p: Paint, w: Float): String {
+            if (p.measureText(s) <= w) return s
+            var n = s.length
+            while (n > 1 && p.measureText(s.take(n) + "…") > w) n--
+            return s.take(n) + "…"
         }
 
         private fun decodeSmall(path: String): Bitmap? {
