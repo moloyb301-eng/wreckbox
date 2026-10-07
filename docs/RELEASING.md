@@ -34,12 +34,15 @@ uninstall (losing settings) and reinstall.
    ```sh
    git tag v0.2.0 && git push origin main v0.2.0
    ```
-3. GitHub Actions runs the tests, builds the Mac app (the Swift app from `wreckbox-mac`, packaged with the same
-   version), Android and Windows, and publishes them together as one release in `wreckbox-releases`. Friends see
-   "WreckBox 0.2.0 is available" in the app (Mac: checks every 30 minutes; phone: when it opens).
-   Mac-only fixes: commit them to `wreckbox-mac` first, then bump and tag here — every release includes both.
+3. GitHub Actions runs the tests, builds Android and Windows and publishes release vX.Y.Z to `wreckbox-releases`.
+   Phones see "WreckBox X.Y.Z is available" when the app opens.
 
-The one link to share: https://github.com/moloyb301-eng/wreckbox-releases/releases/latest
+**Mac updates ship separately** (only when the Mac app changed), from the `wreckbox-mac` repo:
+`scripts/release-mac.sh 0.6.1` packages the app, tags `mac-v0.6.1` and publishes it to `wreckbox-releases` (not
+marked "latest", so phones aren't affected). Macs see the update within 30 minutes. When both changed, do both.
+
+**The one link for friends:** https://wreckbox-api.moloyb301.workers.dev/download — always shows the newest Mac
+and newest Android download, wherever each was released (refreshes every 5 minutes).
 
 Building locally instead: `scripts/build-android-core.sh && (cd app && flutter build apk --release)`; Windows and
 Mac builds need those systems (or CI).

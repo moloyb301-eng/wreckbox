@@ -1,4 +1,4 @@
-# Builds WreckBox for Mac (the Swift app), Windows and Android, runs the tests, and — for tags like v0.2.0 — publishes the builds
+# Builds WreckBox for Windows and Android (the phone app), runs the tests, and — for tags like v0.2.0 — publishes the builds
 # to the public releases repo, where the apps' update check finds them.
 #
 # Secrets (repo Settings → Secrets and variables → Actions):
@@ -84,28 +84,6 @@ jobs:
           name: windows
           path: WreckBox-*-windows-x64.zip
 
-  # The Mac app is the Swift WreckBox (public repo moloyb301-eng/wreckbox-mac), packaged by its scripts/package-mac.sh
-  # (bundled Python, ffmpeg, deno) with this release's version, so one release holds the Mac and Android downloads.
-  mac:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: app/pubspec.yaml
-          path: wreckbox
-      - uses: actions/checkout@v4
-        with:
-          repository: moloyb301-eng/wreckbox-mac
-          path: mac
-      - name: Package (Apple Silicon)
-        run: |
-          v=$(grep '^version:' wreckbox/app/pubspec.yaml | sed 's/version: //; s/+.*//')
-          cd mac && scripts/package-mac.sh "$v"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mac
-          path: mac/dist/WreckBox-mac-arm64.zip
-
   android:
     runs-on: ubuntu-latest
     needs: core
@@ -147,7 +125,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, mac, android]
+    needs: [windows, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -161,4 +139,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${{ vars.RELEASES_REPO }}" \
             --title "WreckBox ${GITHUB_REF_NAME#v}" \
-            --notes "Download the file for your device. Mac (Apple Silicon, macOS 13+): WreckBox-mac-arm64.zip — unzip, move to Applications; the first time macOS blocks it: Done, then System Settings → Privacy & Security → Open Anyway (full guide: https://github.com/moloyb301-eng/wreckbox-mac/blob/main/INSTALL.md). Android: open the .apk to install or update. Windows: unzip and run wreckbox.exe."
+            --notes "Android: open the .apk to install or update. Windows: unzip and run wreckbox.exe. All downloads (Mac too): https://wreckbox-api.moloyb301.workers.dev/download"

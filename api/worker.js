@@ -20,7 +20,7 @@ const TICKET_HOURS = 12;
 const APP_REDIRECTS = new Set(["wreckbox://auth"]);
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
     try {
@@ -33,6 +33,8 @@ export default {
       if (route === "POST /v1/link/claim") return await claimLink(request, env);
       // Sharing: opened by friends (no account needed); the landing page for share links
       if (route === "POST /v1/shares/open") return await openShare(request, env);
+      // The one link for friends: the newest Mac and Android downloads, whichever was released last.
+      if (route === "GET /download") return await downloadPage(env, ctx);
       const landing = url.pathname.match(/^\/s\/([A-Za-z0-9-]{10,40})$/);
       if (landing && request.method === "GET") return sharePage(landing[1]);
 
@@ -349,6 +351,68 @@ async function openShare(request, env) {
     computer: d.name, online: Date.now() - d.last_seen < 5 * 60000, url: d.url,
     ticket: `wbs1.${b64url(new TextEncoder().encode(payload))}.${sig}`, expires: exp * 1000,
   });
+}
+
+// MARK: downloads
+
+const RELEASES_REPO = "moloyb301-eng/wreckbox-releases";
+const MAC_ASSET = "WreckBox-mac-arm64.zip";
+
+/// Mac and Android ship separately (Mac releases are tagged mac-v…, phone releases v…), so the newest of each can
+/// be in different releases: this page finds both. GitHub's answer is cached for 5 minutes.
+async function downloadPage(env, ctx) {
+  const cacheKey = new Request("https://wreckbox-cache/download-page");
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+  const res = await fetch(`https://api.github.com/repos/${RELEASES_REPO}/releases?per_page=40`, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "wreckbox-api" },
+  });
+  const releases = res.ok ? await res.json() : [];
+  const ver = (r) => (r.tag_name || "").replace(/^mac-/, "").replace(/^v/, "");
+  const newer = (a, b) => {
+    const x = a.split(".").map(Number), y = b.split(".").map(Number);
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  };
+  const pick = (test) => {
+    let best = null;
+    for (const r of releases) {
+      if (r.draft || r.prerelease) continue;
+      const a = (r.assets || []).find((x) => test(x.name));
+      if (a && (!best || newer(ver(r), best.version))) best = { version: ver(r), url: a.browser_download_url, size: a.size, date: r.published_at };
+    }
+    return best;
+  };
+  const mac = pick((n) => n === MAC_ASSET);
+  const android = pick((n) => n.endsWith(".apk"));
+  const mb = (n) => `${Math.round(n / 1048576)} MB`;
+  const card = (title, sub, d, steps) => d ? `<div class="card"><h2>${title}</h2><p class="sub">${sub}</p>
+<a class="b" href="${d.url}">Download ${title} · ${d.version}</a><p class="meta">${mb(d.size)} · ${new Date(d.date).toDateString().slice(4)}</p>
+<ol>${steps.map((s) => `<li>${s}</li>`).join("")}</ol></div>` : `<div class="card"><h2>${title}</h2><p class="sub">Not available right now — try again soon.</p></div>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Get WreckBox</title><link href="https://fonts.googleapis.com/css2?family=Doto:wght@700&family=Urbanist:wght@400;600;700&display=swap" rel="stylesheet">
+<style>:root{color-scheme:dark}body{margin:0;background:#08080A;color:#f0f0f0;font:16px Urbanist,-apple-system,system-ui,sans-serif}
+.w{max-width:880px;margin:0 auto;padding:48px 16px}h1{font:700 34px Doto,monospace;letter-spacing:3px;margin:0 0 6px}
+.lead{color:#9a9a9a;margin:0 0 28px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.card{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:24px}
+h2{margin:0;font-size:22px}.sub{color:#9a9a9a;margin:4px 0 18px}.meta{color:#666;font-size:13px;margin:8px 0 0}
+a.b{display:inline-block;padding:12px 20px;border-radius:999px;background:#fff;color:#000;text-decoration:none;font-weight:700}
+ol{color:#bbb;padding-left:20px;line-height:1.55;margin:18px 0 0}a{color:#BB96DA}.foot{color:#666;font-size:13px;margin-top:28px}</style></head>
+<body><div class="w"><h1>WRECKBOX</h1><p class="lead">Your DJ library: every track in the best quality, sorted and tagged, on your Mac and your phone.</p>
+<div class="grid">
+${card("Mac", "Apple Silicon (M1 or newer), macOS 13+", mac, [
+  "Unzip and drag WreckBox into Applications, then open it.",
+  "macOS blocks it the first time: click <b>Done</b>, then <b>System Settings → Privacy &amp; Security → Open Anyway</b>.",
+  "Setup walks you through Soulseek, YouTube and your own Spotify. Turn your VPN on before downloading.",
+  `Full guide: <a href="https://github.com/moloyb301-eng/wreckbox-mac/blob/main/INSTALL.md">INSTALL.md</a>`])}
+${card("Android", "Android 7+", android, [
+  "Open the .apk. Allow installs from your browser or Files when asked.",
+  "If Play Protect warns: <b>More details → Install anyway</b>.",
+  "In the app, tap <b>Allow</b> for file access."])}
+</div><p class="foot">Updates show up inside the apps. Free and open source — <a href="https://github.com/moloyb301-eng/wreckbox-mac">Mac</a> · <a href="https://github.com/moloyb301-eng/wreckbox">Android</a>.</p></div></body></html>`;
+  const out = new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
+  if (res.ok) ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
+  return out;
 }
 
 /// What a share link shows in a browser: open it in WreckBox (or get the app).
