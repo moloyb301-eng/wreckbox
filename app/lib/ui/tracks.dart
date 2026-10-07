@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/material.dart' hide Row;
 import 'package:flutter/material.dart' as m show Row;
 
+import 'package:path/path.dart' as p;
+
 import '../matcher.dart';
 import '../models.dart';
 import '../phone_sync.dart';
@@ -191,6 +193,20 @@ class _TrackListViewState extends State<TrackListView> {
   }
 }
 
+/// What a track's file is: the phone's own copy (its format), or what the computer has ("FLAC", "MP3 320", "OPUS 268").
+String? qualityLabel(TrackRow row) {
+  final crate = PhoneSyncClient.instance?.crateById?[row.id];
+  final computer = crate?['quality'] as String?;
+  final local = row.state?.status == TrackStatus.downloaded ? row.state?.localPath : null;
+  if (local != null) {
+    final ext = p.extension(local).replaceFirst('.', '').toUpperCase();
+    // An original copied from the computer: the computer's label says more (bitrate, bit depth).
+    if (computer != null && crate?['ext'] == '.${ext.toLowerCase()}') return computer;
+    return switch (ext) { 'M4A' => 'AAC', 'OPUS' || 'OGG' => 'OPUS', _ => ext };
+  }
+  return computer;
+}
+
 class _TrackTile extends StatelessWidget {
   final TrackRow row;
   final LibraryStore store;
@@ -234,7 +250,13 @@ class _TrackTile extends StatelessWidget {
             child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(row.track.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(13.5, FontWeight.w600)),
               const SizedBox(height: 2),
-              Text(row.track.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(12, FontWeight.w400, T.text2)),
+              m.Row(children: [
+                Flexible(child: Text(row.track.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(12, FontWeight.w400, T.text2))),
+                if (qualityLabel(row) case final q?) ...[
+                  const SizedBox(width: 6),
+                  Text(q, style: T.dot(9.5, q.startsWith('FLAC') || q.startsWith('WAV') || q.startsWith('AIFF') || q.startsWith('ALAC') ? T.lilac : T.text3)),
+                ],
+              ]),
             ]),
           ),
           SizedBox(width: compact ? 40 : 60, child: BpmReadout(row.bpm, unsure: row.file?.bpmUnsure ?? false, size: compact ? 14 : 17)),

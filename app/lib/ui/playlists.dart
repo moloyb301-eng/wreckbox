@@ -1,7 +1,6 @@
 // Phone: your Spotify playlists (from the computer's library, kept current by its daily Spotify sync), played from
 // your own files — the ones on the phone, the rest streamed from the computer in the chosen quality.
 
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 
@@ -50,8 +49,11 @@ class PlaylistsView extends StatelessWidget {
   static void playPlaylist(LibraryPlaylist pl, {bool shuffle = false}) {
     final ids = pl.trackIDs.where(Player.instance.canPlay).toList();
     if (ids.isEmpty) return;
-    if (shuffle) ids.shuffle(Random());
-    Player.instance.play(ids.first, list: ids);
+    if (shuffle) {
+      Player.instance.playShuffled(ids);
+    } else {
+      Player.instance.play(ids.first, list: ids);
+    }
   }
 }
 

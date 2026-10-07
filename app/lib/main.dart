@@ -8,6 +8,7 @@ import 'config.dart';
 import 'paths.dart';
 import 'phone_sync.dart';
 import 'player.dart';
+import 'net.dart';
 import 'remote_playback.dart';
 import 'widget_bridge.dart';
 import 'account.dart';
@@ -26,6 +27,7 @@ void main() {
   // Everything runs inside the zone so unexpected errors anywhere go to the log that bug reports include.
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+    TunnelDns.install(); // the computer's new tunnel name works at once after it restarts (net.dart)
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
       _logError(details.exceptionAsString(), details.stack);

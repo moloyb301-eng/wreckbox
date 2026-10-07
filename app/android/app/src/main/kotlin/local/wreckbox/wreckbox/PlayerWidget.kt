@@ -183,7 +183,8 @@ class PlayerWidget : AppWidgetProvider() {
             // Tabs: the open one takes the drawer's colour and flows into it
             for ((tab, name, label) in listOf(Triple(R.id.wb_tab_eq, "eq", "Equaliser"), Triple(R.id.wb_tab_controls, "controls", "Options"))) {
                 val open = drawer == name
-                v.setInt(tab, "setBackgroundResource", if (open) R.drawable.wb_tab_active else R.drawable.wb_tab_idle)
+                // Closed (no drawer): complete keys; a drawer open: the open tab flows into it, the other sits on its edge.
+                v.setInt(tab, "setBackgroundResource", when { open -> R.drawable.wb_tab_active; drawer.isEmpty() -> R.drawable.wb_tab_closed; else -> R.drawable.wb_tab_idle })
                 v.setImageViewBitmap(tab, ui(context, label, 12f, 700, if (open) LILAC else TEXT2))
             }
 
@@ -208,10 +209,11 @@ class PlayerWidget : AppWidgetProvider() {
                 v.setImageViewBitmap(R.id.wb_drawer_controls_bg, drawerShell(w, "controls"))
                 val track = p.getString("track", null)?.takeIf { it.isNotEmpty() }
                 v.setImageViewBitmap(R.id.wb_info, dot(context, "${if (track == null) "Nothing queued" else "Trk $track"} · on $device", 8.5f, TEXT3))
-                for ((id, t) in listOf(R.id.wb_back10 to "−10 s", R.id.wb_fwd10 to "+10 s", R.id.wb_restart to "Restart", R.id.wb_stop to "Stop", R.id.wb_open to "Open app",
+                for ((id, t) in listOf(R.id.wb_back10 to "−10 s", R.id.wb_fwd10 to "+10 s", R.id.wb_restart to if (p.getBoolean("shuffle", false)) "Shuffle on" else "Shuffle", R.id.wb_stop to "Stop", R.id.wb_open to "Open app",
                     R.id.wb_handoff to if (device == "PHONE") "Play on Mac" else "Play here")) {
-                    v.setImageViewBitmap(id, ui(context, t, 12f, 600, TEXT))
+                    v.setImageViewBitmap(id, ui(context, t, 12f, 600, if (id == R.id.wb_restart && p.getBoolean("shuffle", false)) Color.BLACK else TEXT))
                 }
+                v.setInt(R.id.wb_restart, "setBackgroundResource", if (p.getBoolean("shuffle", false)) R.drawable.wb_chip_on else R.drawable.wb_chip)
             }
 
             // Buttons
@@ -219,7 +221,7 @@ class PlayerWidget : AppWidgetProvider() {
                 R.id.wb_play to "toggle", R.id.wb_prev to "previous", R.id.wb_next to "next",
                 R.id.wb_voldown to "voldown", R.id.wb_volup to "volup", R.id.wb_lcd to "open",
                 R.id.wb_tab_controls to "drawer:controls", R.id.wb_tab_eq to "drawer:eq",
-                R.id.wb_back10 to "back10", R.id.wb_fwd10 to "fwd10", R.id.wb_restart to "restart", R.id.wb_stop to "stop",
+                R.id.wb_back10 to "back10", R.id.wb_fwd10 to "fwd10", R.id.wb_restart to "shuffle", R.id.wb_stop to "stop",
                 R.id.wb_handoff to "handoff", R.id.wb_open to "open", R.id.wb_eq_on to "eqtoggle",
             ) + presetIds.mapIndexed { i, id -> id to "preset:${presets[i]}" }
             clicks.entries.forEachIndexed { n, (id, action) -> v.setOnClickPendingIntent(id, intent(context, action, n)) }
@@ -513,10 +515,16 @@ class PlayerWidget : AppWidgetProvider() {
                 screw(c, cx + (Geo.POD_R - 12f) * kotlin.math.cos(Math.toRadians(a)).toFloat(), cy + (Geo.POD_R - 12f) * kotlin.math.sin(Math.toRadians(a)).toFloat())
             }
             // Logo bump: the app's tile + WRECKBOX in Doto with a glowing gradient fill and a dark outline
-            pixelRecord(c, 14f, 7f, 20f)
+            // Header, centred on the strip between the bump's top edge (y 4) and the LCD bed (y TOP − 2), its left edge on
+            // the LCD's: the tile, then WRECKBOX centred on its letters' measured height (not its font metrics).
+            val midY = (4f + Geo.TOP - 2f) / 2
+            val tile = 20f
+            pixelRecord(c, Geo.G, midY - tile / 2, tile)
             val word = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 13.5f; letterSpacing = 0.16f }
-            val wx = 14f + 20f + 8f
-            val wy = 22.5f
+            val bounds = android.graphics.Rect()
+            word.getTextBounds("WRECKBOX", 0, 8, bounds)
+            val wx = Geo.G + tile + 9f
+            val wy = midY - (bounds.top + bounds.bottom) / 2f
             c.drawText("WRECKBOX", wx, wy, Paint(word).apply { color = Color.argb(160, 187, 150, 218); setShadowLayer(5f, 0f, 0f, LILAC) })
             c.drawText("WRECKBOX", wx, wy, Paint(word).apply { style = Paint.Style.STROKE; strokeWidth = 1.6f; color = Color.parseColor("#FF0B0A0F") })
             c.drawText("WRECKBOX", wx, wy, Paint(word).apply { shader = LinearGradient(wx, 0f, wx + word.measureText("WRECKBOX"), 0f, intArrayOf(BLUE, PEACH, LILAC), null, Shader.TileMode.CLAMP) })
@@ -584,7 +592,7 @@ class PlayerWidget : AppWidgetProvider() {
             // Badges on the same row, right: device · format
             val chip = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 7.5f; letterSpacing = 0.1f; color = LILAC }
             var bx = w - 10f
-            for (t in listOf(p.getString("device", "PHONE") ?: "PHONE", p.getString("format", "") ?: "").filter { it.isNotEmpty() }) {
+            for (t in listOf(p.getString("device", "PHONE") ?: "PHONE", p.getString("format", "") ?: "", if (p.getBoolean("shuffle", false)) "SHUF" else "").filter { it.isNotEmpty() }) {
                 val tw = chip.measureText(t) + 10f
                 bx -= tw
                 c.drawRoundRect(RectF(bx, 42f, bx + tw, 53f), 3f, 3f, paint { style = Paint.Style.STROKE; strokeWidth = 0.8f; color = Color.argb(140, 187, 150, 218) })

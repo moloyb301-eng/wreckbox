@@ -24,6 +24,7 @@ class RemoteDevice {
   final List<String>? queue;
   final int? index;
   final double? volume;
+  final bool shuffle;
 
   RemoteDevice.fromJson(Map<String, dynamic> j)
       : id = j['id'] ?? '',
@@ -36,7 +37,8 @@ class RemoteDevice {
         updatedAt = (j['updatedAt'] as num?)?.toDouble() ?? 0,
         queue = (j['queue'] as List?)?.cast<String>(),
         index = j['index'] as int?,
-        volume = (j['volume'] as num?)?.toDouble();
+        volume = (j['volume'] as num?)?.toDouble(),
+        shuffle = j['shuffle'] == true;
 
   /// Where it is now, counting the time since it reported.
   double get livePosition {
@@ -112,6 +114,7 @@ class PlaybackSync extends ChangeNotifier {
       'queue': p.fullQueue,
       'index': p.fullIndex,
       'volume': p.audio.volume,
+      'shuffle': p.shuffle,
       'updatedAt': DateTime.now().millisecondsSinceEpoch,
     };
   }
@@ -177,6 +180,8 @@ class PlaybackSync extends ChangeNotifier {
         await p.audio.seek(Duration(milliseconds: ((v ?? 0) * 1000).round()));
       case 'volume':
         await p.audio.setVolume(v ?? 1);
+      case 'shuffle':
+        await p.setShuffle(v == null ? !p.shuffle : v > 0);
       case 'load':
         final q = List<String>.from(args['queue'] ?? const []);
         final i = (args['index'] as int?) ?? 0;

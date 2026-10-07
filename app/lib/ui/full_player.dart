@@ -122,6 +122,13 @@ class _FullPlayerState extends State<FullPlayer> {
                   ]),
                   const SizedBox(height: 8),
                   Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    IconButton(
+                      iconSize: 26,
+                      tooltip: 'Shuffle',
+                      icon: Icon(Icons.shuffle_rounded, color: (remote?.shuffle ?? player.shuffle) ? T.lilac : T.text3),
+                      onPressed: () => remote != null ? sync.command('shuffle', value: remote.shuffle ? 0 : 1) : player.setShuffle(!player.shuffle),
+                    ),
+                    const SizedBox(width: 6),
                     IconButton(iconSize: 34, icon: const Icon(Icons.skip_previous_rounded), onPressed: () => remote != null ? sync.command('previous') : player.previous()),
                     const SizedBox(width: 14),
                     IconButton.filled(

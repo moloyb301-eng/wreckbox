@@ -30,6 +30,13 @@ class PlayerBar extends StatelessWidget {
         final r = id == null ? null : store.row(id);
         if (r == null) return const SizedBox.shrink();
         final controls = Row(mainAxisSize: MainAxisSize.min, children: [
+          if (compact)
+            IconButton(
+              tooltip: player.shuffle ? 'Shuffle is on' : 'Shuffle',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.shuffle_rounded, size: 20, color: player.shuffle ? T.lilac : T.text3),
+              onPressed: () => player.setShuffle(!player.shuffle),
+            ),
           IconButton(tooltip: 'Previous', icon: const Icon(Icons.skip_previous_rounded), color: T.text, onPressed: player.previous),
           IconButton.filled(
             tooltip: player.playing ? 'Pause' : 'Play',
@@ -115,6 +122,12 @@ class PlayerBar extends StatelessWidget {
                   Flexible(child: Text('Playing on ${d.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: T.ui(11.5, FontWeight.w600, T.lilac))),
                 ]),
               ]),
+            ),
+            IconButton(
+              tooltip: 'Shuffle',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.shuffle_rounded, size: 20, color: d.shuffle ? T.lilac : T.text3),
+              onPressed: () => sync.command('shuffle', value: d.shuffle ? 0 : 1),
             ),
             IconButton(tooltip: 'Previous', icon: const Icon(Icons.skip_previous_rounded), color: T.text, onPressed: () => sync.command('previous')),
             IconButton.filled(

@@ -36,6 +36,7 @@ class Settings {
   String eqPreset = 'Flat', visualMode = 'matrix';
   List<double> eqGains = List.filled(10, 0);
   // Phone: the last queue and where it was, so play after a restart (or from the widget) resumes it.
+  bool shuffle = false;
   List<String> lastQueue = [];
   int lastIndex = -1, lastPositionMs = 0;
 
@@ -84,6 +85,7 @@ class Settings {
         ..eqPreset = j['eqPreset'] ?? 'Flat'
         ..visualMode = j['visualMode'] ?? 'matrix'
         ..eqGains = _tenBands(j['eqGains'])
+        ..shuffle = j['shuffle'] ?? false
         ..lastQueue = List<String>.from(j['lastQueue'] ?? const [])
         ..lastIndex = j['lastIndex'] ?? -1
         ..lastPositionMs = j['lastPositionMs'] ?? 0;
@@ -128,6 +130,7 @@ class Settings {
           'eqPreset': eqPreset,
           'visualMode': visualMode,
           'eqGains': eqGains,
+          'shuffle': shuffle,
           'lastQueue': lastQueue,
           'lastIndex': lastIndex,
           'lastPositionMs': lastPositionMs,

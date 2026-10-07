@@ -134,7 +134,9 @@ class Player extends ChangeNotifier {
     error = null;
     final playable = (list ?? [id]).where(canPlay).toList();
     if (!playable.contains(id)) playable.insert(0, id);
-    queue = playable;
+    _ordered = playable;
+    // Shuffle on: this track first, the rest in random order.
+    queue = shuffle ? [id, ...(playable.where((t) => t != id).toList()..shuffle())] : playable;
     if (_desktop) {
       _desktopIndex = queue.indexOf(id);
       return _loadDesktop();
@@ -173,6 +175,42 @@ class Player extends ChangeNotifier {
       error = "Can't play ${store.describe(id)}: $e";
       notifyListeners();
     }
+  }
+
+  /// The list in its own order, to go back to when shuffle is turned off.
+  List<String> _ordered = [];
+  bool get shuffle => Settings.current.shuffle;
+
+  /// Shuffle on: the tracks after this one in random order; off: back to the list's order from here on.
+  Future<void> setShuffle(bool on) async {
+    Settings.current.shuffle = on;
+    unawaited(Settings.current.save());
+    notifyListeners();
+    final id = currentId;
+    if (_desktop || id == null) return;
+    final full = fullQueue, at = index;
+    final List<String> upcoming;
+    if (on) {
+      upcoming = full.sublist(at + 1)..shuffle();
+    } else {
+      final i = _ordered.indexOf(id);
+      upcoming = i < 0 ? full.sublist(at + 1) : _ordered.sublist(i + 1);
+    }
+    // Swap what the player has queued after this track for the new order.
+    if (at + 1 < queue.length) await audio.removeAudioSourceRange(at + 1, queue.length);
+    queue = queue.take(at + 1).toList();
+    _rest = upcoming;
+    await _topUp();
+    notifyListeners();
+  }
+
+  /// Plays a list shuffled (playlists' Shuffle button): shuffle on, a random first track.
+  Future<void> playShuffled(List<String> list) async {
+    final playable = list.where(canPlay).toList();
+    if (playable.isEmpty) return;
+    Settings.current.shuffle = true;
+    unawaited(Settings.current.save());
+    await play(playable[DateTime.now().microsecond % playable.length], list: playable);
   }
 
   static const _window = 25;

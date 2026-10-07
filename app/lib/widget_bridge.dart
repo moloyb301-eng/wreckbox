@@ -65,6 +65,7 @@ class WidgetBridge {
         'wallMs': DateTime.now().millisecondsSinceEpoch,
         'device': remote == null ? 'PHONE' : (remote.kind == 'mac' ? 'MAC' : remote.name.toUpperCase()),
         'format': _format(id, remote != null),
+        'shuffle': remote?.shuffle ?? p.shuffle,
         'bpm': id == null ? null : store.row(id)?.bpm, // the widget's spectrum flips in time with it
         'track': _track(remote),
         'volume': remote?.volume ?? p.audio.volume,
@@ -122,6 +123,8 @@ class WidgetBridge {
           final to = p.audio.position + Duration(seconds: d.toInt());
           await p.audio.seek(to < Duration.zero ? Duration.zero : to);
         }
+      case 'shuffle':
+        remote != null ? await cmd('shuffle', remote.shuffle ? 0 : 1) : await p.setShuffle(!p.shuffle);
       case 'restart':
         remote != null ? await cmd('seek', 0) : await p.audio.seek(Duration.zero);
       case 'voldown' || 'volup':
