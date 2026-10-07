@@ -65,6 +65,7 @@ class WidgetBridge {
         'wallMs': DateTime.now().millisecondsSinceEpoch,
         'device': remote == null ? 'PHONE' : (remote.kind == 'mac' ? 'MAC' : remote.name.toUpperCase()),
         'format': _format(id, remote != null),
+        'bpm': id == null ? null : store.row(id)?.bpm, // the widget's spectrum flips in time with it
         'track': _track(remote),
         'volume': remote?.volume ?? p.audio.volume,
         'art': _artPath,

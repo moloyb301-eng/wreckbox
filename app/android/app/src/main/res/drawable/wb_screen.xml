@@ -1,3 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Green LCD panel (drawers). -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"><corners android:radius="10dp" /><gradient android:angle="270" android:startColor="#FF0A3316" android:endColor="#FF031208" /><stroke android:width="2dp" android:color="#FF050607" /></shape>

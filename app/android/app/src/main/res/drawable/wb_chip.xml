@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A glossy smoked-plastic key: dark violet, a light rim, gloss on the top half. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true"><shape><corners android:radius="100dp" /><gradient android:angle="270" android:startColor="#FF15131B" android:endColor="#FF2A2733" /><stroke android:width="1dp" android:color="#66BB96DA" /></shape></item>
+    <item>
+        <layer-list>
+            <item><shape><corners android:radius="100dp" /><gradient android:angle="270" android:startColor="#FF34303F" android:endColor="#FF16141C" /><stroke android:width="1dp" android:color="#38FFFFFF" /></shape></item>
+            <item android:top="1.5dp" android:left="6dp" android:right="6dp" android:bottom="13dp"><shape><corners android:radius="100dp" /><gradient android:angle="270" android:startColor="#38FFFFFF" android:endColor="#00FFFFFF" /></shape></item>
+        </layer-list>
+    </item>
+</selector>

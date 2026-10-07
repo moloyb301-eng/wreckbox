@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A screen panel in a drawer: dark violet glass with a dark lip. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"><corners android:radius="12dp" /><gradient android:angle="270" android:startColor="#FF120F1A" android:endColor="#FF07060A" /><stroke android:width="1.5dp" android:color="#FF050407" /></shape>

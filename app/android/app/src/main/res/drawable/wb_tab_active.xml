@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The open drawer's tab: the drawer's colour, so the two read as one piece. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape><corners android:topLeftRadius="10dp" android:topRightRadius="10dp" /><solid android:color="#FF07060A" /></shape></item>
+    <item android:top="1dp" android:left="1dp" android:right="1dp"><shape><corners android:topLeftRadius="9dp" android:topRightRadius="9dp" /><solid android:color="#FF1C1A23" /></shape></item>
+</layer-list>

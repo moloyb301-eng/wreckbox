@@ -1,3 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- The selected preset in the list: a lit bar, like Winamp's selected row. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"><corners android:radius="3dp" /><gradient android:angle="0" android:startColor="#FF9BFF5A" android:endColor="#FF4FB33A" /></shape>

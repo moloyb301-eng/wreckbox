@@ -1,46 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Winamp-style tab on the body's bottom edge. -->
-    <style name="WbTab">
-        <item name="android:layout_height">match_parent</item>
-        <item name="android:background">@drawable/wb_tab</item>
-        <item name="android:fontFamily">monospace</item>
-        <item name="android:gravity">center</item>
-        <item name="android:textColor">#FFC9CDD3</item>
-        <item name="android:textSize">9.5sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-    <!-- Green LED key on a drawer screen. -->
-    <style name="WbLed">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">match_parent</item>
-        <item name="android:layout_weight">1</item>
-        <item name="android:layout_marginStart">3dp</item>
-        <item name="android:layout_marginEnd">3dp</item>
-        <item name="android:background">@drawable/wb_led</item>
-        <item name="android:fontFamily">monospace</item>
-        <item name="android:gravity">center</item>
-        <item name="android:textColor">#FFB6FF6A</item>
-        <item name="android:textSize">10sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-    <!-- A row of the presets list, and one preset (selected = lit). -->
+    <!-- Rows of the presets list. -->
     <style name="WbRow">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">0dp</item>
         <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginTop">4dp</item>
         <item name="android:orientation">horizontal</item>
     </style>
-    <style name="WbPreset">
+    <!-- A preset chip (the app's glass pill; white when selected). Its label is a bitmap in Urbanist. -->
+    <style name="WbChip">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">match_parent</item>
         <item name="android:layout_weight">1</item>
-        <item name="android:layout_margin">1dp</item>
-        <item name="android:fontFamily">monospace</item>
-        <item name="android:gravity">center_vertical</item>
-        <item name="android:paddingStart">5dp</item>
-        <item name="android:textColor">#FF8CE05A</item>
-        <item name="android:textSize">9.5sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:layout_marginStart">2dp</item>
+        <item name="android:layout_marginEnd">2dp</item>
+        <item name="android:background">@drawable/wb_chip</item>
+        <item name="android:scaleType">center</item>
+        <item name="android:contentDescription">@null</item>
+    </style>
+    <!-- A key in the options drawer (the app's glass pill). -->
+    <style name="WbPill" parent="WbChip">
+        <item name="android:layout_marginStart">3dp</item>
+        <item name="android:layout_marginEnd">3dp</item>
     </style>
 </resources>

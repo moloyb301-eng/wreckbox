@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The dial's centre: a glossy candy button in the app's gradient. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <layer-list>
+            <item><shape android:shape="oval"><solid android:color="#FF07060A" /></shape></item>
+            <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="2dp"><shape android:shape="oval"><gradient android:angle="315" android:startColor="#FF8EA9CC" android:centerColor="#FFC98F6C" android:endColor="#FF9677B5" /></shape></item>
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item><shape android:shape="oval"><solid android:color="#FF07060A" /></shape></item>
+            <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="2dp"><shape android:shape="oval"><gradient android:angle="315" android:startColor="#FFA9C8F0" android:centerColor="#FFEFAF86" android:endColor="#FFBB96DA" /><stroke android:width="1dp" android:color="#80FFFFFF" /></shape></item>
+            <item android:top="4dp" android:left="10dp" android:right="10dp" android:bottom="28dp"><shape android:shape="oval"><gradient android:angle="270" android:startColor="#B3FFFFFF" android:endColor="#08FFFFFF" /></shape></item>
+        </layer-list>
+    </item>
+</selector>
