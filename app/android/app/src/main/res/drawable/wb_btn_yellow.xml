@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <layer-list>
+            <item><shape android:shape="oval"><solid android:color="#FF07080A" /></shape></item>
+            <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="2dp">
+                <shape android:shape="oval">
+                    <gradient android:type="radial" android:gradientRadius="60%" android:centerX="0.5" android:centerY="0.6" android:startColor="#FFF2C914" android:endColor="#FF6E5200" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item><shape android:shape="oval"><solid android:color="#FF07080A" /></shape></item>
+            <item android:top="2dp" android:left="2dp" android:right="2dp" android:bottom="2dp">
+                <shape android:shape="oval">
+                    <gradient android:type="radial" android:gradientRadius="70%" android:centerX="0.38" android:centerY="0.32" android:startColor="#FFFFF6A8" android:centerColor="#FFF2C914" android:endColor="#FF6E5200" />
+                    <stroke android:width="1dp" android:color="#66FFFFFF" />
+                </shape>
+            </item>
+            <!-- Gloss: white at the top fading out by the middle. -->
+            <item android:top="3dp" android:left="5dp" android:right="5dp" android:bottom="3dp">
+                <shape android:shape="oval">
+                    <gradient android:angle="270" android:startColor="#A6FFFFFF" android:centerColor="#00FFFFFF" android:endColor="#00FFFFFF" android:centerY="0.45" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</selector>

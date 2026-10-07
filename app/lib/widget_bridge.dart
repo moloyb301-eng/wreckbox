@@ -64,6 +64,8 @@ class WidgetBridge {
         'durationMs': ((remote?.duration ?? (p.audio.duration?.inMilliseconds ?? 0) / 1000) * 1000).round(),
         'wallMs': DateTime.now().millisecondsSinceEpoch,
         'device': remote == null ? 'PHONE' : (remote.kind == 'mac' ? 'MAC' : remote.name.toUpperCase()),
+        'format': _format(id, remote != null),
+        'track': _track(remote),
         'volume': remote?.volume ?? p.audio.volume,
         'art': _artPath,
         'eqOn': eq.on,
@@ -71,6 +73,26 @@ class WidgetBridge {
         'gains': eq.gains.map((g) => g.toStringAsFixed(1)).join(','),
       });
     } catch (_) {}
+  }
+
+  /// The LCD's format badge: the file's own format here, or what the stream is being sent as.
+  static String _format(String? id, bool elsewhere) {
+    if (id == null) return '';
+    final p = Player.instance;
+    if (!elsewhere && !p.isRemote(id)) {
+      final path = _store?.state.tracks[id]?.localPath ?? '';
+      final dot = path.lastIndexOf('.');
+      return dot < 0 ? '' : path.substring(dot + 1).toUpperCase();
+    }
+    return switch (p.quality ?? 'flac') { 'high' => 'AAC 256', 'med' => 'AAC 160', 'low' => 'AAC 96', _ => 'FLAC' };
+  }
+
+  /// "007/121", like the old players' track counters.
+  static String _track(RemoteDevice? remote) {
+    final q = remote?.queue ?? Player.instance.fullQueue;
+    final i = remote?.index ?? Player.instance.fullIndex;
+    if (q.isEmpty || i < 0) return '';
+    return '${(i + 1).toString().padLeft(3, '0')}/${q.length.toString().padLeft(3, '0')}';
   }
 
   static Future<void> _action(String a) async {
@@ -99,6 +121,8 @@ class WidgetBridge {
           final to = p.audio.position + Duration(seconds: d.toInt());
           await p.audio.seek(to < Duration.zero ? Duration.zero : to);
         }
+      case 'restart':
+        remote != null ? await cmd('seek', 0) : await p.audio.seek(Duration.zero);
       case 'voldown' || 'volup':
         final d = a == 'voldown' ? -0.1 : 0.1;
         if (remote != null) {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Green LED key on the drawers' screens. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true"><shape><corners android:radius="12dp" /><solid android:color="#FF9BFF5A" /><stroke android:width="1dp" android:color="#FFD8FFB0" /></shape></item>
+    <item><shape><corners android:radius="12dp" /><gradient android:angle="270" android:startColor="#FF12401C" android:endColor="#FF072412" /><stroke android:width="1dp" android:color="#FF4FB33A" /></shape></item>
+</selector>
