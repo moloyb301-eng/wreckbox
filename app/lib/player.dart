@@ -20,6 +20,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'eq.dart';
+import 'friends.dart';
 import 'models.dart';
 import 'phone_sync.dart';
 import 'settings.dart';
@@ -94,7 +95,7 @@ class Player extends ChangeNotifier {
     return st?.status == TrackStatus.downloaded && st?.localPath != null && File(st!.localPath!).existsSync() ? st.localPath : null;
   }
 
-  bool canPlay(String id) => _localPath(id) != null || remoteIds.contains(id);
+  bool canPlay(String id) => _localPath(id) != null || remoteIds.contains(id) || Friends.instance.has(id);
   bool isRemote(String id) => _localPath(id) == null && remoteIds.contains(id);
 
   static Directory? _cacheDir;
@@ -114,8 +115,16 @@ class Player extends ChangeNotifier {
       album: t?.album,
       artUri: art == null ? null : Uri.tryParse(art),
     );
-    final local = _localPath(id);
+    final local = _localPath(id) ?? (remoteIds.contains(id) ? null : Friends.instance.savedFile(id));
     if (local != null) return AudioSource.file(local, tag: tag);
+    // A friend's track (not on this phone or your own computer): from their computer, with their share's ticket.
+    if (!remoteIds.contains(id)) {
+      final f = await Friends.instance.streamOf(id, q);
+      if (f != null) {
+        // ignore: experimental_member_use
+        return LockCachingAudioSource(f.$1, headers: f.$2, cacheFile: await _cacheFile('friend:$id', q), tag: tag);
+      }
+    }
     final s = Settings.current;
     final base = s.pairedDesktop, token = s.pairToken;
     if (base == null || token == null) throw Exception('not on this device');
@@ -223,6 +232,7 @@ class Player extends ChangeNotifier {
     queue = [...queue, ...more];
     try {
       await AccountConnect.refreshIfNeeded(); // a long session outlives a ticket: new tracks get a fresh one
+      await Friends.instance.refreshIfNeeded();
       await audio.addAudioSources([for (final t in more) await _source(t, quality!)]);
     } catch (_) {}
   }

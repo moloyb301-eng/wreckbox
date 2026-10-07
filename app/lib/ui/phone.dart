@@ -18,6 +18,7 @@ import '../services.dart';
 import '../settings.dart';
 import '../store.dart';
 import 'bug_report.dart';
+import 'friends_page.dart';
 import 'account_ui.dart';
 import '../account.dart';
 import 'player_bar.dart';
@@ -65,6 +66,7 @@ class _PhoneShellState extends State<PhoneShell> {
         0 => _library(),
         1 => _OrganisePage(store: widget.store, organiser: widget.organiser, dropbox: widget.dropbox),
         2 => _ComputerPage(store: widget.store, client: widget.client),
+        3 => const FriendsPage(),
         _ => SettingsPage(store: widget.store, dropbox: widget.dropbox),
       };
 
@@ -127,6 +129,7 @@ class _PhoneShellState extends State<PhoneShell> {
             NavigationDestination(icon: Icon(Icons.queue_music), label: 'Library'),
             NavigationDestination(icon: Icon(Icons.auto_fix_high), label: 'Organise'),
             NavigationDestination(icon: Icon(Icons.computer), label: 'Computer'),
+            NavigationDestination(icon: Icon(Icons.people_outline), label: 'Friends'),
             NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
           ],
         ),

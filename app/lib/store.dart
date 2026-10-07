@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import 'engine.dart';
+import 'friends.dart';
 import 'matcher.dart';
 import 'models.dart';
 import 'paths.dart';
@@ -144,7 +145,7 @@ class LibraryStore extends ChangeNotifier {
 
   LibraryTrack? track(String id) {
     final i = _index[id];
-    return i == null ? null : library!.tracks[i];
+    return i == null ? Friends.instance.track(id) : library!.tracks[i];
   }
 
   String genreOf(String id, FileAnalysis? f) => state.genreOverrides[id] ?? '';

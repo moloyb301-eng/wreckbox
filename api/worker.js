@@ -31,6 +31,10 @@ export default {
       if (route === "GET /v1/auth/google/callback") return await googleCallback(url, env, request);
       if (route === "POST /v1/auth/exchange") return await exchange(request, env);
       if (route === "POST /v1/link/claim") return await claimLink(request, env);
+      // Sharing: opened by friends (no account needed); the landing page for share links
+      if (route === "POST /v1/shares/open") return await openShare(request, env);
+      const landing = url.pathname.match(/^\/s\/([A-Za-z0-9-]{10,40})$/);
+      if (landing && request.method === "GET") return sharePage(landing[1]);
 
       const user = await authed(request, env);
       if (!user) return json({ error: "Please sign in again." }, 401);
@@ -92,6 +96,18 @@ export default {
       }
       const tick = url.pathname.match(/^\/v1\/devices\/([^/]+)\/ticket$/);
       if (tick && request.method === "POST") return await ticket(env, user, decodeURIComponent(tick[1]));
+      if (route === "POST /v1/shares") return await createShare(request, env, user, url);
+      if (route === "GET /v1/shares") {
+        const { results } = await env.DB.prepare(
+          "SELECT id, computer, kind, playlist, label, created, expires, revoked, last_used AS lastUsed FROM shares WHERE owner = ? ORDER BY created DESC",
+        ).bind(user.id).all();
+        return json({ shares: results });
+      }
+      const share = url.pathname.match(/^\/v1\/shares\/([A-Za-z0-9_-]+)$/);
+      if (share && request.method === "DELETE") {
+        await env.DB.prepare("UPDATE shares SET revoked = 1 WHERE id = ? AND owner = ?").bind(share[1], user.id).run();
+        return json({ ok: true });
+      }
       if (route === "POST /v1/requests") return await addRequest(request, env, user);
       if (route === "GET /v1/requests") return await takeRequests(url, env, user);
       const dev = url.pathname.match(/^\/v1\/devices\/([^/]+)$/);
@@ -275,6 +291,80 @@ async function ticket(env, user, deviceId) {
   const payload = `${user.id}.${deviceId}.${exp}`;
   const sig = await hmacHex(d.ticket_secret, payload);
   return json({ url: d.url, ticket: `wbt1.${b64url(new TextEncoder().encode(payload))}.${sig}`, expires: exp * 1000 });
+}
+
+// MARK: sharing
+
+const SHARE_TICKET_HOURS = 6;
+const SHARE_OPENS_PER_IP_PER_HOUR = 60;
+// Crockford base32 without look-alikes, grouped: WBX-7K2QD-M9F4H-XR3TC
+const KEY_CHARS = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function newShareKey() {
+  const r = crypto.getRandomValues(new Uint8Array(15));
+  const c = [...r].map((b) => KEY_CHARS[b % KEY_CHARS.length]).join("");
+  return `WBX-${c.slice(0, 5)}-${c.slice(5, 10)}-${c.slice(10, 15)}`;
+}
+const normKey = (k) => String(k || "").trim().toUpperCase().replace(/^.*\/S\//, "").replace(/[^A-Z0-9-]/g, "");
+
+async function createShare(request, env, user, url) {
+  const b = await request.json();
+  const kind = b.kind === "playlist" ? "playlist" : "library";
+  if (!b.computer) return json({ error: "Which computer shares it?" }, 400);
+  if (kind === "playlist" && !b.playlist) return json({ error: "Which playlist?" }, 400);
+  const dev = await env.DB.prepare("SELECT id FROM devices WHERE user = ? AND id = ?").bind(user.id, clip(b.computer, 64)).first();
+  if (!dev) return json({ error: "That computer isn't in your account." }, 404);
+  const key = newShareKey();
+  const id = b64url(crypto.getRandomValues(new Uint8Array(9)));
+  const days = Math.max(0, Math.min(365, Number(b.days) || 0));
+  await env.DB.prepare(
+    "INSERT INTO shares (id, key_hash, owner, computer, kind, playlist, label, created, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(id, await sha256(key), user.id, dev.id, kind, kind === "playlist" ? clip(b.playlist, 200) : null, clip(b.label || "", 80),
+    Date.now(), days ? Date.now() + days * 86400000 : 0).run();
+  return json({ id, key, link: `${url.origin}/s/${key}` });
+}
+
+/// A friend opens a key / link: what it is, the computer's address, and a short-lived ticket for that computer.
+async function openShare(request, env) {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const rk = `shareopen:${ip}:${new Date().toISOString().slice(0, 13)}`;
+  const n = parseInt((await env.LIBRARY.get(rk)) || "0", 10);
+  if (n >= SHARE_OPENS_PER_IP_PER_HOUR) return json({ error: "Too many tries — wait a bit." }, 429);
+  await env.LIBRARY.put(rk, String(n + 1), { expirationTtl: 3600 });
+  const key = normKey((await request.json()).key);
+  const s = await env.DB.prepare("SELECT * FROM shares WHERE key_hash = ?").bind(await sha256(key)).first();
+  if (!s || s.revoked) return json({ error: "That key isn't valid (it may have been revoked)." }, 404);
+  if (s.expires && s.expires < Date.now()) return json({ error: "That key has expired." }, 410);
+  const d = await env.DB.prepare("SELECT name, url, ticket_secret, last_seen FROM devices WHERE user = ? AND id = ?").bind(s.owner, s.computer).first();
+  const owner = await env.DB.prepare("SELECT name, email FROM users WHERE id = ?").bind(s.owner).first();
+  if (!d || !d.ticket_secret) return json({ error: "The computer sharing this isn't set up for sharing yet." }, 409);
+  await env.DB.prepare("UPDATE shares SET last_used = ? WHERE id = ?").bind(Date.now(), s.id).run();
+  const exp = Math.floor(Date.now() / 1000) + SHARE_TICKET_HOURS * 3600;
+  // The computer checks this itself (its own secret) and allows only what the share covers.
+  const payload = `${s.id}|${s.computer}|${exp}|${s.kind}|${s.playlist || ""}`;
+  const sig = await hmacHex(d.ticket_secret, payload);
+  return json({
+    id: s.id, kind: s.kind, playlist: s.playlist, label: s.label,
+    owner: (owner && (owner.name || owner.email.split("@")[0])) || "a friend",
+    computer: d.name, online: Date.now() - d.last_seen < 5 * 60000, url: d.url,
+    ticket: `wbs1.${b64url(new TextEncoder().encode(payload))}.${sig}`, expires: exp * 1000,
+  });
+}
+
+/// What a share link shows in a browser: open it in WreckBox (or get the app).
+function sharePage(key) {
+  const k = normKey(key);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WreckBox — shared music</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#08080A;color:#f0f0f0;font:16px -apple-system,system-ui,sans-serif}
+.c{max-width:420px;padding:32px;text-align:center}h1{font-size:22px;margin:0 0 8px}p{color:#999;line-height:1.5}
+a.b{display:inline-block;margin:14px 6px 0;padding:12px 20px;border-radius:999px;background:#fff;color:#000;text-decoration:none;font-weight:600}
+a.g{background:transparent;color:#BB96DA;border:1px solid #BB96DA66}code{color:#EFAF86;font-size:15px}</style></head>
+<body><div class="c"><h1>Someone shared music with you</h1>
+<p>Open this in WreckBox to stream and download it. If the app doesn't open, add the key by hand: <br><code>${k}</code></p>
+<a class="b" href="wreckbox://share?key=${encodeURIComponent(k)}">Open in WreckBox</a>
+<a class="b g" href="https://github.com/moloyb301-eng/wreckbox-releases/releases/latest">Get WreckBox</a></div></body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
 async function addRequest(request, env, user) {

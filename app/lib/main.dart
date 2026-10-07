@@ -8,6 +8,7 @@ import 'config.dart';
 import 'paths.dart';
 import 'phone_sync.dart';
 import 'player.dart';
+import 'friends.dart';
 import 'net.dart';
 import 'remote_playback.dart';
 import 'widget_bridge.dart';
@@ -34,6 +35,7 @@ void main() {
     };
     await AppPaths.init();
     await Settings.load();
+    await Friends.instance.init(); // friends' shared libraries (friends.dart)
     // just_audio has native backends on Android / Mac; Windows plays through media_kit.
     JustAudioMediaKit.ensureInitialized(windows: true, linux: true, android: false, iOS: false, macOS: false);
     await Player.initBackground(); // Android: keep playing with the screen off, lock-screen controls
