@@ -26,6 +26,8 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "local.wreckbox.wreckbox"
+        // WB_ID_SUFFIX=.test builds a copy that installs beside the real app (fresh-install testing).
+        applicationIdSuffix = System.getenv("WB_ID_SUFFIX") ?: ""
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 24

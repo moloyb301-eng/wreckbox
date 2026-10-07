@@ -303,13 +303,19 @@ class _ArtworkState extends State<Artwork> {
         height: widget.size,
         child: file != null
             ? Image.file(file!, fit: BoxFit.cover, cacheWidth: (widget.size * 2).round(), gaplessPlayback: true)
-            : DecoratedBox(
-                decoration: BoxDecoration(gradient: LinearGradient(colors: [tint.withValues(alpha: 0.55), tint.withValues(alpha: 0.15)])),
-                child: Icon(Icons.music_note, size: widget.size * 0.35, color: Colors.white.withValues(alpha: 0.35)),
-              ),
+            // Not cached on the phone (e.g. no file access yet, or a friend's track): straight from its URL.
+            : widget.track.artworkURL != null
+                ? Image.network(widget.track.artworkURL!, fit: BoxFit.cover, cacheWidth: (widget.size * 2).round(), gaplessPlayback: true,
+                    errorBuilder: (_, _, _) => _placeholder(tint))
+                : _placeholder(tint),
       ),
     );
   }
+
+  Widget _placeholder(Color tint) => DecoratedBox(
+        decoration: BoxDecoration(gradient: LinearGradient(colors: [tint.withValues(alpha: 0.55), tint.withValues(alpha: 0.15)])),
+        child: Icon(Icons.music_note, size: widget.size * 0.35, color: Colors.white.withValues(alpha: 0.35)),
+      );
 }
 
 /// The WreckBox logo: a 32×32 pixel vinyl record (same drawing as the Mac app's PixelRecord).

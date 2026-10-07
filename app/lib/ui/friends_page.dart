@@ -1,7 +1,10 @@
 // Friends tab: add a friend's key / link, browse what they shared, stream it (tap) or download it.
 
 import 'package:flutter/material.dart';
+import 'dart:io';
+
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../friends.dart';
 import '../player.dart';
@@ -192,14 +195,30 @@ class _FriendsPageState extends State<FriendsPage> {
                 icon: Icon(f.savedFile(t.id) != null ? Icons.download_done : Icons.download, color: f.savedFile(t.id) != null ? T.lilac : T.text2, size: 20),
                 onPressed: f.savedFile(t.id) != null
                     ? null
-                    : () async {
-                        if (await confirmVpn(context)) await f.download(t.id);
-                      }),
-            final e => IconButton(tooltip: e, icon: const Icon(Icons.error_outline, color: T.peach, size: 20), onPressed: () => f.download(t.id)),
+                    : () => _download(t)),
+            final e => IconButton(tooltip: e, icon: const Icon(Icons.error_outline, color: T.peach, size: 20), onPressed: () => _download(t)),
           },
         ]),
       ),
     );
+  }
+
+  /// Downloads go to Music/WreckBox/Friends: Android needs file access for that, then the VPN reminder.
+  Future<void> _download(FriendTrack t) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (Platform.isAndroid && !await Permission.manageExternalStorage.isGranted) {
+      await Permission.manageExternalStorage.request();
+      if (!await Permission.manageExternalStorage.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Allow file access so WreckBox can save to Music/WreckBox.')));
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    final ok = await confirmVpn(context);
+    FocusManager.instance.primaryFocus?.unfocus(); // the closing dialog would hand the keyboard back to the key field
+    if (ok) await f.download(t.id);
   }
 
   Future<void> _confirmRemove(FriendShare s) async {

@@ -84,41 +84,8 @@ jobs:
           name: windows
           path: WreckBox-*-windows-x64.zip
 
-  macos:
-    runs-on: macos-latest
-    needs: core
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build engine (libwreckbox_core.dylib)
-        run: cargo build --release --lib
-        working-directory: core
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-      - name: Build app
-        run: flutter build macos --release
-        working-directory: app
-      - name: Bundle engine + Soulseek sidecar (standalone Python)
-        run: |
-          APP="app/build/macos/Build/Products/Release/wreckbox.app"
-          mkdir -p "$APP/Contents/Frameworks" "$APP/Contents/Resources/soulseek"
-          cp core/target/release/libwreckbox_core.dylib "$APP/Contents/Frameworks/"
-          curl -sL -o py.tgz https://github.com/astral-sh/python-build-standalone/releases/download/20240814/cpython-3.11.9+20240814-aarch64-apple-darwin-install_only.tar.gz
-          tar -xzf py.tgz -C "$APP/Contents/Resources/soulseek"
-          "$APP/Contents/Resources/soulseek/python/bin/python3" -m pip install --quiet --no-compile aioslsk
-          cp sidecar/slsk_sync.py "$APP/Contents/Resources/soulseek/"
-          "$APP/Contents/Resources/soulseek/python/bin/python3" "$APP/Contents/Resources/soulseek/slsk_sync.py" --help | head -3
-          mv "$APP" app/build/WreckBox.app
-          codesign --force --deep -s - app/build/WreckBox.app
-      - name: Zip
-        run: |
-          v=$(grep '^version:' app/pubspec.yaml | sed 's/version: //; s/+.*//')
-          cd app/build && ditto -c -k --keepParent WreckBox.app "../../WreckBox-$v-mac-applesilicon.zip"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos
-          path: WreckBox-*-mac-applesilicon.zip
+  # The Mac app is the Swift WreckBox (moloyb301-eng/wreckbox-mac), packaged with its scripts/package-mac.sh and
+  # added to the same release as WreckBox-mac-arm64.zip.
 
   android:
     runs-on: ubuntu-latest
@@ -161,7 +128,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos, android]
+    needs: [windows, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -175,4 +142,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${{ vars.RELEASES_REPO }}" \
             --title "WreckBox ${GITHUB_REF_NAME#v}" \
-            --notes "Download the file for your device. Windows: unzip and run wreckbox.exe. Mac (Apple Silicon): unzip, then right-click WreckBox → Open the first time. Android: open the .apk to install or update."
+            --notes "Download the file for your device. Mac (Apple Silicon, macOS 13+): WreckBox-mac-arm64.zip — unzip, move to Applications; the first time macOS blocks it: Done, then System Settings → Privacy & Security → Open Anyway (full guide: https://github.com/moloyb301-eng/wreckbox-mac/blob/main/INSTALL.md). Android: open the .apk to install or update. Windows: unzip and run wreckbox.exe."

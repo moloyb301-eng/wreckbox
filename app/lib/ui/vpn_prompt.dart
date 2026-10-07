@@ -18,7 +18,7 @@ Future<bool> confirmVpn(BuildContext context) async {
         backgroundColor: T.bgRaised,
         title: Text('Turn on your VPN before downloading', style: T.ui(17, FontWeight.w700)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Soulseek shows the IP address of whoever downloads to the people they download from, and YouTube downloads come from that connection too. Connect your VPN first, then carry on.',
+          Text('Downloads come from your own internet connection, and Soulseek shows your IP address to the people you download from. Connect your VPN first, then carry on.',
               style: T.ui(13, FontWeight.w400, T.text2)),
           const SizedBox(height: 8),
           CheckboxListTile(

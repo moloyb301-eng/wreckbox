@@ -39,19 +39,33 @@ class PhoneShell extends StatefulWidget {
   State<PhoneShell> createState() => _PhoneShellState();
 }
 
-class _PhoneShellState extends State<PhoneShell> {
+class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   int tab = 0;
   bool storageOk = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkStorage();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Back from Android's settings (file access may have just been allowed there).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !storageOk) _checkStorage();
   }
 
   /// Organising files in Download/ and Music/ needs "All files access" on Android 11+.
   Future<void> _checkStorage() async {
     var ok = await Permission.manageExternalStorage.isGranted || await Permission.storage.isGranted;
+    if (!mounted) return;
     setState(() => storageOk = ok);
     if (ok) {
       await AppPaths.init();
