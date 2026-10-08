@@ -2,13 +2,14 @@
 //!
 //!   wbcore analyze FILE…             one JSON line per file
 //!   wbcore tags FILE…                read tags as JSON
+//!   wbcore fingerprint FILE…         Chromaprint fingerprint as JSON (same as fpcalc -json)
 //!   wbcore write-tags < jobs.json    [{"path": …, title, artists, …}] → one JSON result per job
 //!   wbcore compare analysis.json     agreement with the Mac app's Essentia results (cache file)
 
 use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
-use wreckbox_core::{analyze_file, tags};
+use wreckbox_core::{analyze_file, fingerprint, tags};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -17,6 +18,15 @@ fn main() {
             for p in &args[1..] {
                 let out = match analyze_file(Path::new(p)) {
                     Ok(a) => json!({"path": p, "result": a}),
+                    Err(e) => json!({"path": p, "error": e.to_string()}),
+                };
+                println!("{out}");
+            }
+        }
+        Some("fingerprint") => {
+            for p in &args[1..] {
+                let out = match fingerprint::fingerprint(Path::new(p)) {
+                    Ok(f) => json!({"path": p, "duration": f.duration, "fingerprint": f.fingerprint}),
                     Err(e) => json!({"path": p, "error": e.to_string()}),
                 };
                 println!("{out}");

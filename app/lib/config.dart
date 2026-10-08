@@ -3,6 +3,9 @@
 class AppConfig {
   static const appName = 'WreckBox';
 
+  /// AcoustID application key (acoustid.org/new-application) for Identify — one key for the app, like the Mac's.
+  static const acoustidKey = '2HJPWXkWnz';
+
   /// Public repo the apps check for updates (GitHub Releases). SET-BEFORE-RELEASE.
   static const releasesRepo = 'moloyb301-eng/wreckbox-releases';
 

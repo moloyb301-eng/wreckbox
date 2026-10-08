@@ -63,6 +63,9 @@ class Engine {
   /// job: {"path", "title", "artists", "album", "year", "genre", "bpm", "key", "isrc", "cover" (local image path)}
   static Future<Map<String, dynamic>> writeTags(Map<String, dynamic> job) => _run('wb_write_tags', jsonEncode(job));
 
+  /// Chromaprint fingerprint for Identify, same as fpcalc: {"duration", "fingerprint"} or {"error"}
+  static Future<Map<String, dynamic>> fingerprint(String path) => _run('wb_fingerprint', path);
+
   static Future<String> version() async {
     try {
       return (await _run('wb_version'))['version'] ?? '?';

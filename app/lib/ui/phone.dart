@@ -23,6 +23,7 @@ import 'account_ui.dart';
 import '../account.dart';
 import 'player_bar.dart';
 import 'playlists.dart';
+import 'scan_cards.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'vpn_prompt.dart';
@@ -216,6 +217,7 @@ class _OrganisePageState extends State<_OrganisePage> {
     final s = Settings.current;
     return ListView(children: [
       const SizedBox(height: 8),
+      if (Platform.isAndroid) ...[ScanCards(store: widget.store), const SizedBox(height: 12)],
       Glass(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

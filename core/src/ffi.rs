@@ -1,7 +1,7 @@
 //! C ABI for the apps (Dart FFI). Every function takes / returns UTF-8 JSON strings; the caller frees
 //! returned strings with `wb_free`. Errors come back as {"error": "..."} rather than crashing the app.
 
-use crate::{analyze_file, tags};
+use crate::{analyze_file, fingerprint, tags};
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
@@ -57,6 +57,16 @@ pub extern "C" fn wb_write_tags(job: *const c_char) -> *mut c_char {
             Ok(()) => json!({"ok": true}),
             Err(e) => json!({"error": e.to_string()}),
         }
+    })
+}
+
+/// Fingerprint an audio file for Identify: {"duration", "fingerprint"} (same as fpcalc) or {"error"}
+#[no_mangle]
+pub extern "C" fn wb_fingerprint(path: *const c_char) -> *mut c_char {
+    let path = arg(path);
+    guarded(move || match fingerprint::fingerprint(Path::new(&path)) {
+        Ok(f) => serde_json::to_value(f).unwrap_or_default(),
+        Err(e) => json!({"error": e.to_string()}),
     })
 }
 

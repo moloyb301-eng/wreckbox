@@ -3,6 +3,7 @@
 
 pub mod analysis;
 pub mod decode;
+pub mod fingerprint;
 pub mod tags;
 pub mod ffi;
 
