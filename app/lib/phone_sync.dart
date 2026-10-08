@@ -168,6 +168,9 @@ class PhoneSyncClient extends ChangeNotifier {
   Map<String, Map<String, dynamic>>? crateById;
   /// Requests in progress: track id → searching / not_found / failed / ready.
   final Map<String, String> requests = {};
+  /// The computer asked this phone to copy everything it doesn't have yet (its "Send library to phone" button);
+  /// `copyAllDirect` = over a Wi-Fi Direct link even when both are on the same Wi-Fi. The Computer page runs it.
+  bool copyAllAsked = false, copyAllDirect = false;
   bool live = false; // the events stream is connected
   String? lastError;
 
@@ -393,6 +396,12 @@ class PhoneSyncClient extends ChangeNotifier {
         requests[id] = j['status'] as String;
         notifyListeners();
         if (j['status'] == 'ready') _fetchRequested(id);
+      case 'copy-all':
+        final to = j['to'] as String?;
+        if (to != null && to != Account.deviceId()) return;
+        copyAllAsked = true;
+        copyAllDirect = j['direct'] == true;
+        notifyListeners();
     }
   }
 

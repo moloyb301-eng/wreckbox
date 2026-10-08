@@ -24,11 +24,12 @@ class DirectLink {
   static Map<String, dynamic>? group; // {ssid, pass, freq} while the phone hosts one
 
   /// Gets a connection fit for a big copy. Returns 'wifi' (same network) or 'direct'; `say` reports progress.
+  /// `direct`: skip the shared Wi-Fi and always make the direct link (faster than most home routers).
   /// Throws with a message for the user when neither works.
-  static Future<String> open(PhoneSyncClient c, void Function(String) say) async {
+  static Future<String> open(PhoneSyncClient c, void Function(String) say, {bool direct = false}) async {
     say('Checking the connection…');
-    if (await _onLan(c.base)) return 'wifi';
-    if (Settings.current.remoteDesktop != null) {
+    if (!direct && await _onLan(c.base)) return 'wifi';
+    if (!direct && Settings.current.remoteDesktop != null) {
       await PhoneSyncClient.preferLan(); // home Wi-Fi address, if this phone can reach it
       if (await _onLan(c.base)) return 'wifi';
     }

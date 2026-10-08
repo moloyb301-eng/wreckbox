@@ -47,11 +47,18 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.client.addListener(_onClient);
     _checkStorage();
+  }
+
+  /// The computer asked to send its library: show the Computer page, which runs the copy.
+  void _onClient() {
+    if (widget.client.copyAllAsked && tab != 2 && mounted) setState(() => tab = 2);
   }
 
   @override
   void dispose() {
+    widget.client.removeListener(_onClient);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -290,8 +297,35 @@ class _ComputerPageState extends State<_ComputerPage> {
 
   static String gb(num bytes) => bytes >= 1e9 ? '${(bytes / 1e9).toStringAsFixed(1)} GB' : '${(bytes / 1e6).round()} MB';
 
-  /// Copies every track the computer has and this phone doesn't — over the shared Wi-Fi, or a direct link.
-  Future<void> _getEverything(List<Map<String, dynamic>> items) async {
+  /// Tracks on the computer that this phone doesn't have yet.
+  List<Map<String, dynamic>> _missing() {
+    final have = {for (final e in widget.store.state.tracks.entries) if (e.value.status == TrackStatus.downloaded) e.key};
+    return [for (final i in crate ?? const <Map<String, dynamic>>[]) if (!have.contains(i['id']) && widget.store.track(i['id'] as String) != null) i];
+  }
+
+  /// The computer's "Send library to phone" button: start the big copy here.
+  void _onClient() {
+    final c = widget.client;
+    if (!c.copyAllAsked || !mounted) return;
+    if (copying || working || crate == null) return; // already copying, or picked up once the crate is in
+    c.copyAllAsked = false;
+    final items = _missing();
+    if (items.isEmpty) {
+      setState(() => status = 'Your computer asked to send everything — this phone already has it all.');
+      return;
+    }
+    _getEverything(items, direct: c.copyAllDirect);
+  }
+
+  @override
+  void dispose() {
+    widget.client.removeListener(_onClient);
+    super.dispose();
+  }
+
+  /// Copies every track the computer has and this phone doesn't — over the shared Wi-Fi, or a direct link
+  /// (`direct`: always the direct link).
+  Future<void> _getEverything(List<Map<String, dynamic>> items, {bool direct = false}) async {
     final c = widget.client;
     setState(() {
       copying = true;
@@ -302,7 +336,7 @@ class _ComputerPageState extends State<_ComputerPage> {
     });
     c.stopLive();
     try {
-      final via = await DirectLink.open(c, (s) => setState(() => copyLine = s));
+      final via = await DirectLink.open(c, (s) => setState(() => copyLine = s), direct: direct);
       copyVia = via == 'direct' ? 'direct Wi-Fi link' : 'Wi-Fi';
       await DirectLink.keepAwake(true);
       copyClock
@@ -353,8 +387,9 @@ class _ComputerPageState extends State<_ComputerPage> {
         Text('${available.length} tracks there · ${missing.length} not on this phone yet${flac ? ' (${gb(size)})' : ''}',
             style: T.ui(13, FontWeight.w600, T.text2)),
         const SizedBox(height: 4),
-        Text('On the same Wi-Fi it copies over that. Otherwise the phone makes a direct Wi-Fi link and your computer joins it '
-            '— its internet pauses until the copy is done.', style: T.ui(12, FontWeight.w400, T.text3)),
+        Text('On the same Wi-Fi it copies over that. Otherwise — or with Direct Wi-Fi link — the phone makes a direct Wi-Fi '
+            'link and your computer joins it; its internet pauses until the copy is done. You can also start it from the '
+            'computer: Sync to phone → Send library to phone.', style: T.ui(12, FontWeight.w400, T.text3)),
         const SizedBox(height: 10),
         if (copying) ...[
           LinearProgressIndicator(
@@ -378,6 +413,12 @@ class _ComputerPageState extends State<_ComputerPage> {
               style: PillStyle.smart,
               onTap: missing.isEmpty || working ? null : () => _getEverything(missing),
             ),
+            if (Platform.isAndroid)
+              PillButton(
+                label: 'Direct Wi-Fi link',
+                icon: Icons.wifi_tethering,
+                onTap: missing.isEmpty || working ? null : () => _getEverything(missing, direct: true),
+              ),
             _qualityPicker(),
           ]),
       ]),
@@ -393,6 +434,7 @@ class _ComputerPageState extends State<_ComputerPage> {
       final where = (Settings.current.pairedDesktop ?? '').startsWith('https://') ? 'from anywhere' : 'on Wi-Fi';
       setState(() => status = 'Connected to ${info['name']} $where — ${c.length} tracks available');
       widget.client.startLive();
+      _onClient();
     } catch (e) {
       setState(() => status = "Can't reach the computer. Same Wi-Fi? Is \"Sync to phone\" sharing on? ($e)");
     }
@@ -403,6 +445,8 @@ class _ComputerPageState extends State<_ComputerPage> {
   @override
   void initState() {
     super.initState();
+    widget.client.addListener(_onClient);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onClient()); // asked before this page was open
     if (Account.signedIn) {
       _findComputers();
     } else if (Settings.current.pairedDesktop != null) {
