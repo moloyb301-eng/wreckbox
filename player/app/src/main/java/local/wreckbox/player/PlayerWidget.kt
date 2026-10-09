@@ -1,4 +1,4 @@
-package local.wreckbox.wreckbox
+package local.wreckbox.player
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -6,7 +6,6 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -18,32 +17,38 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
-import io.flutter.embedding.engine.FlutterEngineCache
-import io.flutter.plugin.common.MethodChannel
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import org.json.JSONObject
+import java.io.File
 import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-// Home-screen player: a Y2K player shell — smoked translucent plastic with an iridescent rim and a glossy highlight,
-// an LCD with ghost segments and glare, a round Sonique-style dial, tabs hanging off the bottom edge that pull out
-// drawers — built in the app's own design language: its near-black glass, the lilac / light-blue / peach gradient,
-// Doto for the display and dot labels, Urbanist for text, white and glass pills. The body and an open drawer are
-// drawn as one continuous shape.
+// Home-screen player (moved here from the WreckBox app): a Y2K player shell — smoked translucent plastic with an
+// iridescent rim and a glossy highlight, an LCD with ghost segments and glare, a round Sonique-style dial, tabs hanging
+// off the bottom edge that pull out drawers (Equaliser, Queue, Options) — in the WreckBox design language: near-black
+// glass, the lilac / light-blue / peach gradient, Doto for the display and dot labels, Urbanist for text.
 //
 // The shell, LCD, dial and EQ are bitmaps drawn at the widget's real width from the same dp grid as
-// res/layout/wb_widget.xml (Geo). The app pushes what's playing (update(), from Dart through MainActivity);
-// buttons go back to the app's Dart side on the audio service's engine ("wreckbox/widget").
+// res/layout/wb_widget.xml (Geo). It reads the player directly (PlayerService) and is redrawn when it changes;
+// buttons act on the player in this process. On the lock screen (Android's keyguard widgets) it's a compact LCD +
+// transport (res/layout/wb_widget_lock.xml).
+@UnstableApi
 class PlayerWidget : AppWidgetProvider() {
 
-    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) = render(context)
+    // The launcher asks again (it restarted, the widget was added): it needs everything, not just the changes.
+    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) { ids.forEach { forgetSent(it) }; render(context) }
 
     override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) = render(context)
 
@@ -51,15 +56,15 @@ class PlayerWidget : AppWidgetProvider() {
         super.onReceive(context, intent)
         val action = intent.getStringExtra(EXTRA) ?: return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        when (action) {
+        when {
             // Drawers open / close inside the widget; one at a time.
-            "drawer:controls", "drawer:eq" -> {
+            action.startsWith("drawer:") -> {
                 val want = action.removePrefix("drawer:")
                 prefs.edit().putString("drawer", if (prefs.getString("drawer", "") == want) "" else want).apply()
                 render(context)
             }
-            "open" -> context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            else -> toApp(context, action)
+            action == "open" -> context.startActivity(Intent(context, MainActivity::class.java).putExtra("page", "now").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            else -> act(context, action)
         }
     }
 
@@ -73,9 +78,7 @@ class PlayerWidget : AppWidgetProvider() {
         const val LCD_H = 104f
         const val SEEK_T = 158f
         const val SEEK_H = 6f
-        const val TAB_EQ_W = 104f
         const val TAB_GAP = 6f
-        const val TAB_OPT_W = 92f
         const val DRAWER_H = 176f
         const val IN_T = 18f
         const val IN_B = 16f
@@ -88,53 +91,99 @@ class PlayerWidget : AppWidgetProvider() {
         const val SLAB_B = 178f
         const val POD_R = 80f
         const val DIAL_CY = TOP + DIAL / 2
+        val TABS = listOf(88f, 76f, 84f) // Equaliser, Queue, Options at full size
+
+        /// The tabs' widths at this widget width: full size, or squeezed so the last stays clear of the pod.
+        fun tabs(w: Float): List<Float> {
+            val podLeft = w - DIAL_END - DIAL / 2 - sqrt(POD_R * POD_R - (BODY_H - 28f - DIAL_CY) * (BODY_H - 28f - DIAL_CY))
+            val room = podLeft - 10f - G - 2 * TAB_GAP
+            val k = (room / TABS.sum()).coerceIn(0.6f, 1f)
+            return TABS.map { it * k }
+        }
+        fun tabsEnd(w: Float) = G + tabs(w).sum() + 2 * TAB_GAP
+    }
+
+    /** Everything the widget shows, read from the player. */
+    data class Snap(
+        val title: String?, val artist: String?, val playing: Boolean, val posMs: Long, val durMs: Long,
+        val track: String, val source: Source?, val quality: String?, val shuffle: Boolean, val repeat: Int,
+        val liked: Boolean, val volume: Int, val upcoming: List<Pair<Int, Track>>, val eq: Eq.State, val alive: Boolean,
+    ) {
+        /** "FLAC 24/96", "MP3 320", "OPUS 160": the LCD's format badge. */
+        val format get() = quality?.split(" · ")?.let { p ->
+            if (p.size >= 2) "${p[0]} ${p[1].removePrefix("~").removeSuffix(" kbps").replace(",", "")}" else p[0]
+        } ?: ""
     }
 
     companion object {
         const val PREFS = "wreckbox_widget"
         private const val EXTRA = "wb_action"
-        private const val ENGINE = "audio_service_engine"
-        val presets = listOf("Flat", "Bass boost", "Club", "Hip-hop", "Electronic", "Vocal", "Treble", "Loudness")
         private val presetLabels = listOf("Flat", "Bass", "Club", "Hip-hop", "Electro", "Vocal", "Treble", "Loud")
-        private val frameIds = listOf(R.id.wb_sf0, R.id.wb_sf1, R.id.wb_sf2, R.id.wb_sf3, R.id.wb_sf4, R.id.wb_sf5, R.id.wb_sf6, R.id.wb_sf7)
+        private val presets get() = Eq.presets.keys.toList()
         private val presetIds = listOf(R.id.wb_p0, R.id.wb_p1, R.id.wb_p2, R.id.wb_p3, R.id.wb_p4, R.id.wb_p5, R.id.wb_p6, R.id.wb_p7)
+        private val queueIds = listOf(R.id.wb_q0, R.id.wb_q1, R.id.wb_q2, R.id.wb_q3, R.id.wb_q4)
 
-        // The app's palette (theme.dart)
+        // The app's palette
         private val TEXT = Color.parseColor("#F0FFFFFF")
         private val TEXT2 = Color.parseColor("#99FFFFFF")
         private val TEXT3 = Color.parseColor("#5CFFFFFF")
-        private val HAIR = Color.parseColor("#14FFFFFF")
         private val PEACH = Color.parseColor("#FFEFAF86")
         private val LILAC = Color.parseColor("#FFBB96DA")
         private val BLUE = Color.parseColor("#FFA9C8F0")
         private val DRAWER = Color.parseColor("#FF131218")   // = wb_tab_active
 
-        /// Called by MainActivity when the app's Dart side reports a change.
-        fun update(context: Context, state: Map<*, *>) {
-            val e = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            for ((k, v) in state) {
-                when (v) {
-                    is String -> e.putString(k as String, v)
-                    is Boolean -> e.putBoolean(k as String, v)
-                    is Int -> e.putLong(k as String, v.toLong())
-                    is Long -> e.putLong(k as String, v)
-                    is Double -> e.putFloat(k as String, v.toFloat())
-                    null -> e.remove(k as String)
+        private var appContext: Context? = null
+        private val main = Handler(Looper.getMainLooper())
+        private val pending = Runnable { appContext?.let { render(it) } }
+
+        /// The player changed: redraw soon (changes come in bursts).
+        fun render() {
+            main.removeCallbacks(pending)
+            main.postDelayed(pending, 250)
+        }
+
+        private fun player() = PlayerService.instance?.player
+
+        /// A button: done here on the player (the service is in this process). With the service not running (after a
+        /// reboot, or the app was closed), transport keys open the app, which starts it and picks up the saved queue.
+        private fun act(context: Context, action: String) {
+            val audio = context.getSystemService(AudioManager::class.java)
+            // Volume is the phone's media volume (shown with the system's slider), so it works for every source.
+            when (action) {
+                "volup", "voldown" -> {
+                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, if (action == "volup") AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                    return render(context)
                 }
+                "eqtoggle" -> { Eq.load(context); return Eq.setOn(!Eq.state.value.on) }
             }
-            e.apply()
+            if (action.startsWith("preset:")) { Eq.load(context); Eq.choose(action.removePrefix("preset:")); return }
+            val p = player()
+            if (p == null) {
+                // The service isn't running (app closed, phone restarted, update): start it right here — no screen
+                // needed (and a background app can't open one anyway) — and press the button once it's up.
+                val app = context.applicationContext
+                val started = PlayerService.connect(app) { svc -> run(svc.player, action, app); render(app) }
+                // Fully closed app on Android 12+: a background press can't start the service, so open the app (it
+                // starts the service and runs the press).
+                if (!started) context.startActivity(Intent(context, MainActivity::class.java).putExtra("page", "now").putExtra("widget", action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            }
+            run(p, action, context)
             render(context)
         }
 
-        /// A button for the app: run it on the Dart side if the app (its audio service) is alive, else open the app.
-        private fun toApp(context: Context, action: String) {
-            val engine = FlutterEngineCache.getInstance().get(ENGINE)
-            if (engine == null) {
-                context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                return
-            }
-            Handler(Looper.getMainLooper()).post {
-                MethodChannel(engine.dartExecutor.binaryMessenger, "wreckbox/widget").invokeMethod("action", action)
+        /// Also used by MainActivity for a press that had to start the app first.
+        fun run(p: HybridPlayer, action: String, context: Context) {
+            when (action) {
+                "toggle" -> p.toggle()
+                "next" -> p.seekToNext()
+                "previous" -> p.seekToPrevious()
+                "back10" -> p.seekMs((p.positionMs() - 10_000).coerceAtLeast(0))
+                "fwd10" -> p.seekMs(p.positionMs() + 10_000)
+                "shuffle" -> p.setShuffle(!p.ui.value.shuffle)
+                "repeat" -> p.cycleRepeat()
+                "like" -> p.current()?.let { Library.get(context).toggleLike(it) }
+                else -> if (action.startsWith("jump:")) action.removePrefix("jump:").toIntOrNull()?.let(p::jumpTo)
             }
         }
 
@@ -145,114 +194,284 @@ class PlayerWidget : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
-        fun render(context: Context) {
-            val manager = AppWidgetManager.getInstance(context)
-            for (id in manager.getAppWidgetIds(ComponentName(context, PlayerWidget::class.java))) {
-                // The width the launcher gave this widget (portrait).
-                val w = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH).takeIf { it > 0 } ?: 340
-                runCatching { manager.updateAppWidget(id, views(context, w.toFloat())) }
+        fun snap(context: Context): Snap {
+            val audio = context.getSystemService(AudioManager::class.java)
+            val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+            Eq.load(context)
+            val p = player()
+            if (p == null) {
+                // Not running: what was playing last (the saved queue), paused.
+                val saved = runCatching {
+                    val j = JSONObject(File(context.filesDir, "queue.json").readText())
+                    val q = j.optJSONArray("queue").toTracks()
+                    q.getOrNull(j.optInt("index", -1))?.let { it to "%03d/%03d".format(j.optInt("index") + 1, q.size) }
+                }.getOrNull()
+                val t = saved?.first
+                return Snap(t?.title, t?.artist, false, 0, t?.durationMs ?: 0, saved?.second ?: "", t?.source, t?.let { Quality.cached(it) },
+                    false, Player.REPEAT_MODE_OFF, t?.let { Library.get(context).isLiked(it) } ?: false, volume, emptyList(), Eq.state.value, false)
             }
+            val u = p.ui.value
+            val t = u.current
+            return Snap(t?.title, t?.artist, u.playing, p.positionMs(), p.durationMs(),
+                if (t == null) "" else "%03d/%03d".format(u.index + 1, u.queue.size), t?.source, u.quality, u.shuffle, u.repeat,
+                t?.let { Library.get(context).isLiked(it) } ?: false, volume,
+                u.queue.withIndex().filter { it.index > u.index }.take(queueIds.size).map { it.index to it.value }, Eq.state.value, true)
         }
 
-        private fun views(context: Context, w: Float): RemoteViews {
+        fun render(context: Context) {
+            appContext = context.applicationContext
+            val manager = AppWidgetManager.getInstance(context)
+            val ids = manager.getAppWidgetIds(ComponentName(context, PlayerWidget::class.java))
+            if (ids.isEmpty()) return
+            val s = snap(context)
+            for (id in ids) {
+                val o = manager.getAppWidgetOptions(id)
+                val lock = o.getInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, -1) == AppWidgetProviderInfo_KEYGUARD
+                // The width the launcher gave this widget (portrait).
+                val w = o.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH).takeIf { it > 0 } ?: if (lock) 300 else 340
+                if (lock) { runCatching { manager.updateAppWidget(id, lockViews(context, w.toFloat(), s)) }; continue }
+                val key = "$w|${context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("drawer", "")}"
+                val full = fullKey[id] != key
+                if (full) { fullKey[id] = key; sent.remove(id) }
+                runCatching {
+                    val v = views(context, w.toFloat(), s, id, full)
+                    if (full) manager.updateAppWidget(id, v) else manager.partiallyUpdateAppWidget(id, v)
+                }.onFailure { fullKey.remove(id) }
+            }
+            if (s.playing) startTicking(context) // the clock is a Doto image: redrawn once a second while playing
+        }
+
+        private const val AppWidgetProviderInfo_KEYGUARD = 2 // AppWidgetProviderInfo.WIDGET_CATEGORY_KEYGUARD
+
+        // MARK: sending only what changed
+        //
+        // A full update (all pictures) goes out only when the widget's size, the open drawer or the screen it's on
+        // changes; otherwise each picture is sent only if what it shows changed (a key per view), as a partial update.
+        // The casing, dial and drawer trays are drawn once per size and reused.
+
+        private val fullKey = mutableMapOf<Int, String>()
+        private val sent = mutableMapOf<Int, MutableMap<Int, String>>()
+        private val shapes = object : android.util.LruCache<String, Bitmap>(24 * 1024 * 1024) {
+            override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+        }
+        fun forgetSent(widget: Int) { fullKey.remove(widget); sent.remove(widget) }
+
+        private fun shape(key: String, make: () -> Bitmap): Bitmap = shapes.get(key) ?: make().also { shapes.put(key, it) }
+
+        /// Sets an image only if its key changed since it was last sent to this widget (or on a full update).
+        private fun img(v: RemoteViews, widget: Int, view: Int, key: String, make: () -> Bitmap) {
+            val m = sent.getOrPut(widget) { mutableMapOf() }
+            if (m[view] == key) return
+            m[view] = key
+            v.setImageViewBitmap(view, make())
+        }
+
+        private fun prop(v: RemoteViews, widget: Int, view: Int, key: String, set: () -> Unit) {
+            val m = sent.getOrPut(widget) { mutableMapOf() }
+            if (m[view] == key) return
+            m[view] = key
+            set()
+        }
+
+        private fun views(context: Context, w: Float, s: Snap, widget: Int, full: Boolean): RemoteViews {
             fonts(context)
-            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val v = RemoteViews(context.packageName, R.layout.wb_widget)
-            val playing = p.getBoolean("playing", false)
-            val title = p.getString("title", null)
-            val drawer = p.getString("drawer", "") ?: ""
-            val eqOn = p.getBoolean("eqOn", true)
-            val device = p.getString("device", "PHONE") ?: "PHONE"
+            val drawer = prefs.getString("drawer", "") ?: ""
+            val eq = s.eq
+            val wk = w.toInt()
 
             // Body
-            v.setImageViewBitmap(R.id.wb_body_bg, body(w, p, drawer.isNotEmpty(), playing))
-            v.setImageViewBitmap(R.id.wb_lcd, lcd(w - Geo.G - Geo.LCD_RIGHT, Geo.LCD_H, p, title, playing))
-            v.setImageViewBitmap(R.id.wb_dial, dial())
-            // Spectrum: 8 frames the launcher flips through, half a beat apart (the track's BPM)
-            for ((f, id) in frameIds.withIndex()) v.setImageViewBitmap(id, spectrumFrame(title, playing, f))
-            val bpm = p.getFloat("bpm", 120f).takeIf { it in 60f..200f } ?: 120f
-            v.setInt(R.id.wb_spectrum, "setFlipInterval", (30000f / bpm).roundToInt().coerceIn(110, 300))
-            val pos = if (title == null) 0 else p.getLong("positionMs", 0)
-            val since = if (playing) System.currentTimeMillis() - p.getLong("wallMs", System.currentTimeMillis()) else 0
-            v.setImageViewBitmap(R.id.wb_clock, clock(context, pos + since, playing, title != null))
-            if (playing) startTicking(context) // the clock is a Doto image: redrawn once a second while playing
-            val dur = p.getLong("durationMs", 0)
-            v.setProgressBar(R.id.wb_progress, 1000, if (dur > 0) ((pos + since) * 1000 / dur).toInt().coerceIn(0, 1000) else 0, false)
-            v.setImageViewResource(R.id.wb_play, if (playing) R.drawable.wb_icb_pause else R.drawable.wb_icb_play)
+            img(v, widget, R.id.wb_body_bg, "$wk|${s.playing}") { shape("body|$wk|${s.playing}") { body(w, s.playing) } }
+            img(v, widget, R.id.wb_lcd, "$wk|${s.title}|${s.artist}|${s.track}|${s.format}|${s.shuffle}|${s.volume}|${s.source}") {
+                lcd(w - Geo.G - Geo.LCD_RIGHT, Geo.LCD_H, s)
+            }
+            img(v, widget, R.id.wb_dial, "dial") { shape("dial") { dial() } }
+            // Spectrum: the music's real levels (still when there's nothing to measure)
+            v.setImageViewBitmap(R.id.wb_sf0, spectrumFrame(Levels.bands.value))
+            img(v, widget, R.id.wb_clock, "${s.posMs / 1000}|${s.playing}|${s.title != null}") { clock(context, s.posMs, s.playing, s.title != null) }
+            v.setProgressBar(R.id.wb_progress, 1000, if (s.durMs > 0) (s.posMs * 1000 / s.durMs).toInt().coerceIn(0, 1000) else 0, false)
+            prop(v, widget, R.id.wb_play, "${s.playing}") { v.setImageViewResource(R.id.wb_play, if (s.playing) R.drawable.wb_icb_pause else R.drawable.wb_icb_play) }
 
-            // Tabs: the open one takes the drawer's colour and flows into it
-            for ((tab, name, label) in listOf(Triple(R.id.wb_tab_eq, "eq", "Equaliser"), Triple(R.id.wb_tab_controls, "controls", "Options"))) {
-                val open = drawer == name
-                // Closed (no drawer): complete keys; a drawer open: the open tab flows into it, the other sits on its edge.
-                v.setInt(tab, "setBackgroundResource", when { open -> R.drawable.wb_tab_active; drawer.isEmpty() -> R.drawable.wb_tab_closed; else -> R.drawable.wb_tab_idle })
-                v.setImageViewBitmap(tab, ui(context, label, 12f, 700, if (open) LILAC else TEXT2))
+            if (full) {
+                // Tabs: the open one takes the drawer's colour and flows into it
+                val widths = Geo.tabs(w)
+                for ((i, tab) in listOf(Triple(R.id.wb_tab_eq, "eq", "Equaliser"), Triple(R.id.wb_tab_queue, "queue", "Queue"), Triple(R.id.wb_tab_controls, "controls", "Options")).withIndex()) {
+                    val (id, name, label) = tab
+                    val open = drawer == name
+                    if (Build.VERSION.SDK_INT >= 31) v.setViewLayoutWidth(id, widths[i], TypedValue.COMPLEX_UNIT_DIP)
+                    // Closed (no drawer): complete keys; a drawer open: the open tab flows into it, the other sits on its edge.
+                    v.setInt(id, "setBackgroundResource", when { open -> R.drawable.wb_tab_active; drawer.isEmpty() -> R.drawable.wb_tab_closed; else -> R.drawable.wb_tab_idle })
+                    v.setImageViewBitmap(id, ui(context, label, if (widths[i] < 70f) 10.5f else 12f, 700, if (open) LILAC else TEXT2))
+                }
+                v.setViewVisibility(R.id.wb_drawer_eq, if (drawer == "eq") View.VISIBLE else View.GONE)
+                v.setViewVisibility(R.id.wb_drawer_queue, if (drawer == "queue") View.VISIBLE else View.GONE)
+                v.setViewVisibility(R.id.wb_drawer_controls, if (drawer == "controls") View.VISIBLE else View.GONE)
             }
 
-            // Drawers
-            v.setViewVisibility(R.id.wb_drawer_eq, if (drawer == "eq") View.VISIBLE else View.GONE)
-            v.setViewVisibility(R.id.wb_drawer_controls, if (drawer == "controls") View.VISIBLE else View.GONE)
+            // Drawers (only the open one is drawn)
             if (drawer == "eq") {
-                v.setImageViewBitmap(R.id.wb_drawer_eq_bg, drawerShell(w, "eq"))
+                img(v, widget, R.id.wb_drawer_eq_bg, "$wk") { shape("drawer|$wk|0") { drawerShell(w, 0) } }
                 val inner = w - 2 * Geo.G
-                v.setImageViewBitmap(R.id.wb_eq_curve, eqPanel((inner - 8) * 11 / 21, Geo.DRAWER_H - Geo.IN_T - Geo.IN_B, p.getString("gains", "") ?: "", eqOn, p.getString("eqPreset", "Flat") ?: "Flat"))
-                v.setImageViewBitmap(R.id.wb_presets_label, dot(context, "Presets", 8.5f, TEXT3))
-                v.setInt(R.id.wb_eq_on, "setBackgroundResource", if (eqOn) R.drawable.wb_toggle_on else R.drawable.wb_chip)
-                v.setImageViewBitmap(R.id.wb_eq_on, ui(context, if (eqOn) "On" else "Off", 10.5f, 700, if (eqOn) Color.parseColor("#FF141218") else TEXT2))
-                val preset = p.getString("eqPreset", "Flat")
+                val note = if (s.source == Source.SPOTIFY) "Not on Spotify" else null
+                img(v, widget, R.id.wb_eq_curve, "$wk|${eq.gains}|${eq.on}|${eq.preset}|$note") {
+                    eqPanel((inner - 8) * 11 / 21, Geo.DRAWER_H - Geo.IN_T - Geo.IN_B, eq.gains, eq.on, eq.preset, note)
+                }
+                img(v, widget, R.id.wb_presets_label, "p") { dot(context, "Presets", 8.5f, TEXT3) }
+                prop(v, widget, -1, "eqon|${eq.on}") {
+                    v.setInt(R.id.wb_eq_on, "setBackgroundResource", if (eq.on) R.drawable.wb_toggle_on else R.drawable.wb_chip)
+                    v.setImageViewBitmap(R.id.wb_eq_on, ui(context, if (eq.on) "On" else "Off", 10.5f, 700, if (eq.on) Color.parseColor("#FF141218") else TEXT2))
+                }
                 presetIds.forEachIndexed { i, id ->
-                    val on = presets[i] == preset
-                    v.setInt(id, "setBackgroundResource", if (on) R.drawable.wb_chip_on else R.drawable.wb_chip)
-                    v.setImageViewBitmap(id, ui(context, presetLabels[i], 11f, 600, if (on) Color.BLACK else TEXT2))
+                    val on = presets[i] == eq.preset
+                    prop(v, widget, id, "$on") {
+                        v.setInt(id, "setBackgroundResource", if (on) R.drawable.wb_chip_on else R.drawable.wb_chip)
+                        v.setImageViewBitmap(id, ui(context, presetLabels[i], 11f, 600, if (on) Color.BLACK else TEXT2))
+                    }
+                }
+            }
+            if (drawer == "queue") {
+                img(v, widget, R.id.wb_drawer_queue_bg, "$wk") { shape("drawer|$wk|1") { drawerShell(w, 1) } }
+                val rowW = w - 2 * Geo.G - 20
+                queueIds.forEachIndexed { i, id ->
+                    val item = s.upcoming.getOrNull(i)
+                    val key = "$wk|${item?.first}|${item?.second?.key}|${s.upcoming.isEmpty()}"
+                    img(v, widget, id, key) { queueRow(context, rowW, item?.first, item?.second, i == 0 && s.upcoming.isEmpty()) }
+                    if (item != null) prop(v, widget, -100 - i, "${item.first}") { v.setOnClickPendingIntent(id, intent(context, "jump:${item.first}", 100 + i)) }
                 }
             }
             if (drawer == "controls") {
-                v.setImageViewBitmap(R.id.wb_drawer_controls_bg, drawerShell(w, "controls"))
-                val track = p.getString("track", null)?.takeIf { it.isNotEmpty() }
-                v.setImageViewBitmap(R.id.wb_info, dot(context, "${if (track == null) "Nothing queued" else "Trk $track"} · on $device", 8.5f, TEXT3))
-                for ((id, t) in listOf(R.id.wb_back10 to "−10 s", R.id.wb_fwd10 to "+10 s", R.id.wb_restart to if (p.getBoolean("shuffle", false)) "Shuffle on" else "Shuffle", R.id.wb_stop to "Stop", R.id.wb_open to "Open app",
-                    R.id.wb_handoff to if (device == "PHONE") "Play on Mac" else "Play here")) {
-                    v.setImageViewBitmap(id, ui(context, t, 12f, 600, if (id == R.id.wb_restart && p.getBoolean("shuffle", false)) Color.BLACK else TEXT))
+                img(v, widget, R.id.wb_drawer_controls_bg, "$wk") { shape("drawer|$wk|2") { drawerShell(w, 2) } }
+                val info = listOfNotNull(
+                    if (s.track.isEmpty()) "Nothing queued" else "Trk ${s.track}",
+                    s.source?.let { if (it == Source.YOUTUBE) "YouTube Music" else it.label },
+                    s.quality,
+                ).joinToString(" · ")
+                img(v, widget, R.id.wb_info, info) { dot(context, info, 8.5f, TEXT3) }
+                val repeatLabel = when (s.repeat) { Player.REPEAT_MODE_ONE -> "Repeat 1"; Player.REPEAT_MODE_ALL -> "Repeat on"; else -> "Repeat" }
+                for ((id, t, lit) in listOf(
+                    Triple(R.id.wb_back10, "−10 s", false), Triple(R.id.wb_fwd10, "+10 s", false),
+                    Triple(R.id.wb_restart, if (s.shuffle) "Shuffle on" else "Shuffle", s.shuffle),
+                    Triple(R.id.wb_stop, repeatLabel, s.repeat != Player.REPEAT_MODE_OFF),
+                    Triple(R.id.wb_handoff, if (s.liked) "♥ Liked" else "♡ Like", s.liked),
+                    Triple(R.id.wb_open, "Open app", false),
+                )) {
+                    prop(v, widget, id, "$t|$lit") {
+                        v.setImageViewBitmap(id, ui(context, t, 12f, 600, if (lit) Color.BLACK else TEXT))
+                        if (id != R.id.wb_handoff) v.setInt(id, "setBackgroundResource", if (lit) R.drawable.wb_chip_on else R.drawable.wb_chip)
+                        else v.setInt(id, "setBackgroundResource", if (lit) R.drawable.wb_chip_smart else R.drawable.wb_chip)
+                    }
                 }
-                v.setInt(R.id.wb_restart, "setBackgroundResource", if (p.getBoolean("shuffle", false)) R.drawable.wb_chip_on else R.drawable.wb_chip)
             }
 
-            // Buttons
-            val clicks = mapOf(
-                R.id.wb_play to "toggle", R.id.wb_prev to "previous", R.id.wb_next to "next",
-                R.id.wb_voldown to "voldown", R.id.wb_volup to "volup", R.id.wb_lcd to "open",
-                R.id.wb_tab_controls to "drawer:controls", R.id.wb_tab_eq to "drawer:eq",
-                R.id.wb_back10 to "back10", R.id.wb_fwd10 to "fwd10", R.id.wb_restart to "shuffle", R.id.wb_stop to "stop",
-                R.id.wb_handoff to "handoff", R.id.wb_open to "open", R.id.wb_eq_on to "eqtoggle",
-            ) + presetIds.mapIndexed { i, id -> id to "preset:${presets[i]}" }
-            clicks.entries.forEachIndexed { n, (id, action) -> v.setOnClickPendingIntent(id, intent(context, action, n)) }
+            // Buttons (they don't change: set with the full update)
+            if (full) {
+                val clicks = mapOf(
+                    R.id.wb_play to "toggle", R.id.wb_prev to "previous", R.id.wb_next to "next",
+                    R.id.wb_voldown to "voldown", R.id.wb_volup to "volup", R.id.wb_lcd to "open",
+                    R.id.wb_tab_controls to "drawer:controls", R.id.wb_tab_eq to "drawer:eq", R.id.wb_tab_queue to "drawer:queue",
+                    R.id.wb_back10 to "back10", R.id.wb_fwd10 to "fwd10", R.id.wb_restart to "shuffle", R.id.wb_stop to "repeat",
+                    R.id.wb_handoff to "like", R.id.wb_open to "open", R.id.wb_eq_on to "eqtoggle",
+                ) + presetIds.mapIndexed { i, id -> id to "preset:${presets[i]}" }
+                clicks.entries.forEachIndexed { n, (id, action) -> v.setOnClickPendingIntent(id, intent(context, action, n)) }
+            }
+            return v
+        }
+
+        /// The lock-screen widget: the LCD (clock, format, title, artist, seek) over a row of keys.
+        private fun lockViews(context: Context, w: Float, s: Snap): RemoteViews {
+            fonts(context)
+            val v = RemoteViews(context.packageName, R.layout.wb_widget_lock)
+            v.setImageViewBitmap(R.id.wb_lock_bg, lockShell(w))
+            v.setImageViewBitmap(R.id.wb_lcd, lcd(w - 2 * Geo.G, Geo.LCD_H, s))
+            v.setImageViewBitmap(R.id.wb_clock, clock(context, s.posMs, s.playing, s.title != null))
+            v.setProgressBar(R.id.wb_progress, 1000, if (s.durMs > 0) (s.posMs * 1000 / s.durMs).toInt().coerceIn(0, 1000) else 0, false)
+            v.setImageViewResource(R.id.wb_play, if (s.playing) R.drawable.wb_icb_pause else R.drawable.wb_icb_play)
+            for ((id, t) in listOf(R.id.wb_like to if (s.liked) "♥" else "♡", R.id.wb_shuffle to "Shuf")) {
+                val lit = if (id == R.id.wb_like) s.liked else s.shuffle
+                v.setImageViewBitmap(id, ui(context, t, if (id == R.id.wb_like) 16f else 11.5f, 700, if (lit) Color.BLACK else TEXT))
+                v.setInt(id, "setBackgroundResource", if (lit) R.drawable.wb_chip_on else R.drawable.wb_chip)
+            }
+            v.setImageViewBitmap(R.id.wb_prev, glyph(context, false))
+            v.setImageViewBitmap(R.id.wb_next, glyph(context, true))
+            val clicks = mapOf(R.id.wb_play to "toggle", R.id.wb_prev to "previous", R.id.wb_next to "next", R.id.wb_like to "like",
+                R.id.wb_shuffle to "shuffle", R.id.wb_lcd to "open")
+            clicks.entries.forEachIndexed { n, (id, action) -> v.setOnClickPendingIntent(id, intent(context, action, 200 + n)) }
             return v
         }
 
         // MARK: the clock, ticking while playing
 
-        private val ticker = Handler(Looper.getMainLooper())
         private var ticking = false
+        private var wantsLevels = false
 
         private fun startTicking(context: Context) {
             if (ticking) return
             ticking = true
             val app = context.applicationContext
-            ticker.postDelayed(object : Runnable {
+            main.postDelayed(object : Runnable {
                 override fun run() {
-                    val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    if (!p.getBoolean("playing", false) || p.getString("title", null) == null) { ticking = false; return }
-                    val ms = p.getLong("positionMs", 0) + System.currentTimeMillis() - p.getLong("wallMs", System.currentTimeMillis())
+                    val p = player()
+                    val u = p?.ui?.value
                     val manager = AppWidgetManager.getInstance(app)
                     val ids = manager.getAppWidgetIds(ComponentName(app, PlayerWidget::class.java))
-                    if (ids.isEmpty()) { ticking = false; return }
-                    val v = RemoteViews(app.packageName, R.layout.wb_widget)
-                    v.setImageViewBitmap(R.id.wb_clock, clock(app, ms, true, true))
-                    val dur = p.getLong("durationMs", 0)
-                    if (dur > 0) v.setProgressBar(R.id.wb_progress, 1000, (ms * 1000 / dur).toInt().coerceIn(0, 1000), false)
-                    runCatching { manager.partiallyUpdateAppWidget(ids, v) }
-                    ticker.postDelayed(this, 1000 - System.currentTimeMillis() % 1000)
+                    val screenOn = app.getSystemService(android.os.PowerManager::class.java).isInteractive
+                    // The widget's spectrum listens only while the screen is on and something plays.
+                    val want = screenOn && p != null && u?.playing == true && ids.isNotEmpty()
+                    if (want != wantsLevels) { wantsLevels = want; if (want) Levels.want() else Levels.unwant() }
+                    if (p == null || u == null || !u.playing || u.current == null || ids.isEmpty()) { ticking = false; return }
+                    // Screen off: nobody sees the widget — check back in a few seconds instead of redrawing.
+                    if (!screenOn) { main.postDelayed(this, 3000); return }
+                    val ms = p.positionMs()
+                    val dur = p.durationMs()
+                    for (id in ids) {
+                        val lock = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, -1) == AppWidgetProviderInfo_KEYGUARD
+                        val v = RemoteViews(app.packageName, if (lock) R.layout.wb_widget_lock else R.layout.wb_widget)
+                        v.setImageViewBitmap(R.id.wb_clock, clock(app, ms, true, true))
+                        if (!lock) v.setImageViewBitmap(R.id.wb_sf0, spectrumFrame(Levels.bands.value))
+                        if (dur > 0) v.setProgressBar(R.id.wb_progress, 1000, (ms * 1000 / dur).toInt().coerceIn(0, 1000), false)
+                        runCatching { manager.partiallyUpdateAppWidget(id, v) }
+                    }
+                    main.postDelayed(this, 1000 - System.currentTimeMillis() % 1000)
                 }
             }, 1000)
+        }
+
+        /// A queue row in the drawer: Doto position number, Urbanist title, dim artist. Empty: a hint on the first row.
+        private fun queueRow(context: Context, wDp: Float, index: Int?, t: Track?, hint: Boolean): Bitmap {
+            val d = context.resources.displayMetrics.density
+            val b = Bitmap.createBitmap(max(1, (wDp * d).roundToInt()), max(1, (22 * d).roundToInt()), Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            val y = 15.5f * d
+            if (t == null || index == null) {
+                if (hint) c.drawText("Nothing up next", 4 * d, y, paint { typeface = urbanist(500); textSize = 12f * d; color = TEXT3 })
+                return b
+            }
+            c.drawText("%02d".format(index + 1), 4 * d, y, paint { typeface = dotFace(); isFakeBoldText = true; textSize = 11f * d; color = LILAC })
+            val tp = paint { typeface = urbanist(650); textSize = 12.5f * d; color = TEXT }
+            val ap = paint { typeface = urbanist(500); textSize = 11f * d; color = TEXT2 }
+            val x = 28 * d
+            val room = b.width - x - 4 * d
+            val title = fit(t.title, tp, room * 0.62f)
+            c.drawText(title, x, y, tp)
+            val ax = x + tp.measureText(title) + 8 * d
+            c.drawText(fit(t.artist, ap, b.width - ax - 4 * d), ax, y, ap)
+            c.drawLine(4 * d, b.height - 0.5f * d, b.width - 4 * d, b.height - 0.5f * d, paint { color = Color.argb(18, 255, 255, 255); strokeWidth = d * 0.6f })
+            return b
+        }
+
+        /// Previous / next glyphs for the lock-screen keys.
+        private fun glyph(context: Context, next: Boolean): Bitmap {
+            val d = context.resources.displayMetrics.density
+            val s = 18 * d
+            val b = Bitmap.createBitmap(s.roundToInt(), s.roundToInt(), Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            if (!next) { c.scale(-1f, 1f, s / 2, s / 2) }
+            val g = paint { color = TEXT }
+            c.drawPath(Path().apply { moveTo(s * 0.18f, s * 0.2f); lineTo(s * 0.68f, s * 0.5f); lineTo(s * 0.18f, s * 0.8f); close() }, g)
+            c.drawRect(s * 0.7f, s * 0.2f, s * 0.82f, s * 0.8f, g)
+            return b
         }
 
         // MARK: fonts and labels (the app's: Doto for the display and dot labels, Urbanist for text)
@@ -441,7 +660,7 @@ class PlayerWidget : AppWidgetProvider() {
         /// A drawer's outline: a tray whose top steps down past the tabs with an S-curve (the tabs plug into it).
         private fun drawerOutline(w: Float, h: Float): Path {
             val l = 1.5f
-            val tabsEnd = Geo.G + Geo.TAB_EQ_W + Geo.TAB_GAP + Geo.TAB_OPT_W
+            val tabsEnd = Geo.tabsEnd(w)
             val drop = 12f
             val r = 26f
             return Path().apply {
@@ -503,7 +722,7 @@ class PlayerWidget : AppWidgetProvider() {
 
         /// The body: the funky casing (bodyOutline), the raised pod the dial sits on (with four screws), the logo bump
         /// (tile + glowing WRECKBOX), the LCD and seek beds.
-        private fun body(w: Float, p: SharedPreferences, drawerOpen: Boolean, playing: Boolean): Bitmap {
+        private fun body(w: Float, playing: Boolean): Bitmap {
             val h = Geo.BODY_H
             val (b, c) = canvas(w, h)
             shell(c, w, h, bodyOutline(w), openTop = false, openBottom = false, base = null)
@@ -554,14 +773,25 @@ class PlayerWidget : AppWidgetProvider() {
             c.drawPath(path, paint { style = Paint.Style.STROKE; strokeWidth = 0.8f; color = Color.BLACK })
         }
 
+        /// The lock-screen widget's casing: the body's shell as a plain rounded slab (no pod, no tabs).
+        private fun lockShell(w: Float): Bitmap {
+            val h = Geo.LCD_H + Geo.SEEK_H + 2 * Geo.G + 12f + 52f
+            val (b, c) = canvas(w, h)
+            shell(c, w, h, roundRect(RectF(1.5f, 1.5f, w - 1.5f, h - 1.5f), Geo.R, Geo.R, Geo.R, Geo.R), openTop = false, openBottom = false, base = null)
+            bed(c, RectF(Geo.G, Geo.G, w - Geo.G, Geo.G + Geo.LCD_H), 12f)
+            bed(c, RectF(Geo.G, Geo.G + Geo.LCD_H + 8f, w - Geo.G, Geo.G + Geo.LCD_H + 8f + Geo.SEEK_H), 3f)
+            return b
+        }
+
         /// A drawer: the same casing as a tray (drawerOutline) hanging off the tabs; the open tab flows into it (the
         /// rim is left out under that tab).
-        private fun drawerShell(w: Float, which: String): Bitmap {
+        private fun drawerShell(w: Float, tab: Int): Bitmap {
             val h = Geo.DRAWER_H
             val (b, c) = canvas(w, h)
             shell(c, w, h, drawerOutline(w, h), openTop = false, openBottom = false, base = DRAWER)
-            val tabL = Geo.G + if (which == "eq") 0f else Geo.TAB_EQ_W + Geo.TAB_GAP
-            val tabR = tabL + if (which == "eq") Geo.TAB_EQ_W else Geo.TAB_OPT_W
+            val widths = Geo.tabs(w)
+            val tabL = Geo.G + widths.take(tab).sum() + tab * Geo.TAB_GAP
+            val tabR = tabL + widths[tab]
             c.drawRect(tabL + 1f, 0f, tabR - 1f, 3f, Paint().apply { color = DRAWER })
             screw(c, 11f, h - 11f)
             screw(c, w - 11f, h - 11f)
@@ -570,7 +800,8 @@ class PlayerWidget : AppWidgetProvider() {
 
         /// The LCD: deep violet glass with Sonique's ripple rings (in lilac), ghost dots, scanlines and a glare; the
         /// track counter, title and artist. The clock and the animated spectrum are separate images on top.
-        private fun lcd(w: Float, h: Float, p: SharedPreferences, title: String?, playing: Boolean): Bitmap {
+        private fun lcd(w: Float, h: Float, s: Snap): Bitmap {
+            val title = s.title
             val (b, c) = canvas(w, h)
             val r = RectF(0f, 0f, w, h)
             c.save()
@@ -587,12 +818,12 @@ class PlayerWidget : AppWidgetProvider() {
             val scan = Paint().apply { color = Color.argb(26, 0, 0, 0) }
             y = 0f
             while (y < h) { c.drawRect(0f, y, w, y + 0.7f, scan); y += 2f }
-            c.drawText(p.getString("track", null)?.takeIf { it.isNotEmpty() }?.let { "TRK $it" } ?: "TRK ---/---", 10f, 50f,
+            c.drawText(s.track.takeIf { it.isNotEmpty() }?.let { "TRK $it" } ?: "TRK ---/---", 10f, 50f,
                 paint { typeface = dotFace(); isFakeBoldText = true; textSize = 8.5f; letterSpacing = 0.15f; color = Color.argb(150, 187, 150, 218) })
-            // Badges on the same row, right: device · format
+            // Badges on the same row, right: source · format · shuffle · volume
             val chip = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 7.5f; letterSpacing = 0.1f; color = LILAC }
             var bx = w - 10f
-            for (t in listOf(p.getString("device", "PHONE") ?: "PHONE", p.getString("format", "") ?: "", if (p.getBoolean("shuffle", false)) "SHUF" else "").filter { it.isNotEmpty() }) {
+            for (t in listOf("VOL ${s.volume}", if (s.shuffle) "SHUF" else "", s.format, when (s.source) { Source.LOCAL -> "PHONE"; Source.YOUTUBE -> "YTM"; Source.SPOTIFY -> "SPOT"; null -> "" }).filter { it.isNotEmpty() }) {
                 val tw = chip.measureText(t) + 10f
                 bx -= tw
                 c.drawRoundRect(RectF(bx, 42f, bx + tw, 53f), 3f, 3f, paint { style = Paint.Style.STROKE; strokeWidth = 0.8f; color = Color.argb(140, 187, 150, 218) })
@@ -603,7 +834,7 @@ class PlayerWidget : AppWidgetProvider() {
             val tp = paint { typeface = urbanist(700); textSize = 14.5f; color = TEXT; setShadowLayer(4f, 0f, 0f, Color.argb(120, 187, 150, 218)) }
             c.drawText(fit(title ?: "Nothing playing", tp, w - 20f), 10f, 77f, tp)
             val ap = paint { typeface = urbanist(500); textSize = 11.5f; color = TEXT2 }
-            c.drawText(fit(p.getString("artist", null) ?: "Tap play to pick up where you left off", ap, w - 20f), 10f, 93f, ap)
+            c.drawText(fit(s.artist ?: "Tap play to pick up where you left off", ap, w - 20f), 10f, 93f, ap)
             c.drawPath(Path().apply { moveTo(w * 0.52f, 0f); lineTo(w * 0.76f, 0f); lineTo(w * 0.46f, h); lineTo(w * 0.22f, h); close() },
                 Paint().apply { shader = LinearGradient(0f, 0f, 0f, h, Color.argb(20, 255, 255, 255), Color.argb(2, 255, 255, 255), Shader.TileMode.CLAMP) })
             c.restore()
@@ -611,36 +842,25 @@ class PlayerWidget : AppWidgetProvider() {
             return b
         }
 
-        /// One frame of the spectrum (12 × 6 dots, lilac → peach): frames alternate kick / off-beat so the launcher's
-        /// flipping, timed to the BPM, pulses with the music. Paused: every frame is the same low still.
-        private fun spectrumFrame(title: String?, playing: Boolean, f: Int): Bitmap {
+        /// The spectrum: 8 columns × 6 dots lit by the music's real levels (Levels), lilac → peach. No levels (paused,
+        /// Spotify, screen just turned on): all dots dim — nothing made up.
+        private fun spectrumFrame(bands: FloatArray?): Bitmap {
             val w = 62f
             val h = 30f
             val (b, c) = canvas(w, h)
-            val cols = 12
+            val cols = Levels.BANDS
             val rows = 6
-            val gap = 1.4f
+            val gap = 1.6f
             val dw = (w - (cols - 1) * gap) / cols
             val dh = (h - (rows - 1) * gap) / rows
-            val rnd = Random((title ?: "").hashCode() * 31 + if (playing) f else 0)
-            // A spectrum's shape: strong lows falling off to the highs; the kick lifts the lows on the beat frames,
-            // the rest jitters frame to frame.
-            val kick = if (f % 2 == 0) 1f else 0.25f
             for (i in 0 until cols) {
-                val t = i / (cols - 1f)
-                val shape = 0.85f - 0.55f * t
-                val level = when {
-                    title == null -> 0f
-                    !playing -> shape * 0.35f
-                    else -> (shape * (0.45f + 0.4f * kick * (1f - t)) + (rnd.nextFloat() - 0.5f) * 0.45f).coerceIn(0.08f, 1f)
-                }
-                val lit = (level * rows).roundToInt()
+                val lit = if (bands == null) 0 else (bands[i] * rows + 0.35f).toInt().coerceIn(0, rows)
                 for (row in 0 until rows) {
                     val x0 = i * (dw + gap)
                     val y0 = h - (row + 1) * dh - row * gap
                     val on = row < lit
                     val color = if (on) dotColor(row / (rows - 1f)) else Color.argb(22, 255, 255, 255)
-                    c.drawRoundRect(RectF(x0, y0, x0 + dw, y0 + dh), 0.9f, 0.9f, paint { this.color = color; if (on && row == lit - 1) setShadowLayer(1.4f, 0f, 0f, color) })
+                    c.drawRoundRect(RectF(x0, y0, x0 + dw, y0 + dh), 0.9f, 0.9f, paint { this.color = color })
                 }
             }
             return b
@@ -695,14 +915,13 @@ class PlayerWidget : AppWidgetProvider() {
         }
 
         /// The app's EQ: ten dot columns from −12 to +12 dB, lit from the 0 line, lilac → peach; preset name on top.
-        private fun eqPanel(w: Float, h: Float, csv: String, on: Boolean, preset: String): Bitmap {
-            val gains = csv.split(",").mapNotNull { it.toFloatOrNull() }.let { if (it.size == 10) it else List(10) { 0f } }
+        private fun eqPanel(w: Float, h: Float, gains: List<Float>, on: Boolean, preset: String, note: String?): Bitmap {
             val (b, c) = canvas(w, h)
             val r = RectF(0.5f, 0.5f, w - 0.5f, h - 0.5f)
             c.drawRoundRect(r, 12f, 12f, paint { shader = LinearGradient(0f, 0f, 0f, h, Color.parseColor("#FF120F1A"), Color.parseColor("#FF07060A"), Shader.TileMode.CLAMP) })
             c.drawRoundRect(r, 12f, 12f, paint { style = Paint.Style.STROKE; strokeWidth = 1.5f; color = Color.parseColor("#FF050407") })
             c.drawText("EQUALISER", 10f, 17f, paint { typeface = dotFace(); isFakeBoldText = true; textSize = 8.5f; letterSpacing = 0.15f; color = TEXT3 })
-            c.drawText(if (on) preset else "Off", w - 10f, 17f, paint { typeface = urbanist(650); textSize = 10.5f; color = if (on) LILAC else TEXT3; textAlign = Paint.Align.RIGHT })
+            c.drawText(note ?: if (on) preset else "Off", w - 10f, 17f, paint { typeface = urbanist(650); textSize = 10.5f; color = if (on) LILAC else TEXT3; textAlign = Paint.Align.RIGHT })
             val dots = 13
             val half = dots / 2
             val top = 28f

@@ -36,26 +36,17 @@
             android:contentDescription="@null"
             android:scaleType="fitStart" />
 
-        <!-- Spectrum: 8 frames the launcher flips through by itself (widgets can't animate otherwise), in time
-             with the track's BPM. Top right inside the LCD: 10 from its right edge (150 + 10), 8 from its top. -->
-        <ViewFlipper
-            android:id="@+id/wb_spectrum"
+        <!-- Spectrum: the music's real levels (Levels), redrawn with the clock once a second while the screen is on.
+             Top right inside the LCD: 10 from its right edge (170 + 10), 8 from its top. -->
+        <ImageView
+            android:id="@+id/wb_sf0"
             android:layout_width="62dp"
             android:layout_height="30dp"
             android:layout_gravity="end|top"
             android:layout_marginTop="52dp"
             android:layout_marginEnd="180dp"
-            android:autoStart="true"
-            android:flipInterval="140">
-            <ImageView android:id="@+id/wb_sf0" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf1" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf2" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf3" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf4" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf5" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf6" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-            <ImageView android:id="@+id/wb_sf7" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
-        </ViewFlipper>
+            android:contentDescription="@null"
+            android:scaleType="fitXY" />
 
         <!-- Seek bar under the LCD, same left / right edges -->
         <ProgressBar
@@ -77,8 +68,9 @@
             android:layout_marginStart="14dp"
             android:orientation="horizontal">
 
-            <ImageView android:id="@+id/wb_tab_eq" android:layout_width="104dp" android:layout_height="match_parent" android:background="@drawable/wb_tab_idle" android:contentDescription="Equaliser drawer" android:scaleType="center" />
-            <ImageView android:id="@+id/wb_tab_controls" android:layout_width="92dp" android:layout_height="match_parent" android:layout_marginStart="6dp" android:background="@drawable/wb_tab_idle" android:contentDescription="Options drawer" android:scaleType="center" />
+            <ImageView android:id="@+id/wb_tab_eq" android:layout_width="88dp" android:layout_height="match_parent" android:background="@drawable/wb_tab_idle" android:contentDescription="Equaliser drawer" android:scaleType="center" />
+            <ImageView android:id="@+id/wb_tab_queue" android:layout_width="76dp" android:layout_height="match_parent" android:layout_marginStart="6dp" android:background="@drawable/wb_tab_idle" android:contentDescription="Queue drawer" android:scaleType="center" />
+            <ImageView android:id="@+id/wb_tab_controls" android:layout_width="84dp" android:layout_height="match_parent" android:layout_marginStart="6dp" android:background="@drawable/wb_tab_idle" android:contentDescription="Options drawer" android:scaleType="center" />
         </LinearLayout>
 
         <!-- Dial: 124 × 124, 14 from the right, 44 from the top (level with the LCD). The ring is one bitmap; the
@@ -138,6 +130,36 @@
                 <LinearLayout style="@style/WbRow"><ImageView android:id="@+id/wb_p4" style="@style/WbChip" /><ImageView android:id="@+id/wb_p5" style="@style/WbChip" /></LinearLayout>
                 <LinearLayout style="@style/WbRow"><ImageView android:id="@+id/wb_p6" style="@style/WbChip" /><ImageView android:id="@+id/wb_p7" style="@style/WbChip" /></LinearLayout>
             </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ═══ Queue drawer: the next five songs, tap one to play it ═══ -->
+    <FrameLayout
+        android:id="@+id/wb_drawer_queue"
+        android:layout_width="match_parent"
+        android:layout_height="176dp"
+        android:visibility="gone">
+
+        <ImageView android:id="@+id/wb_drawer_queue_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginStart="14dp"
+            android:layout_marginTop="18dp"
+            android:layout_marginEnd="14dp"
+            android:layout_marginBottom="16dp"
+            android:background="@drawable/wb_card"
+            android:orientation="vertical"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp">
+            <ImageView android:id="@+id/wb_q0" style="@style/WbQueueRow" />
+            <ImageView android:id="@+id/wb_q1" style="@style/WbQueueRow" />
+            <ImageView android:id="@+id/wb_q2" style="@style/WbQueueRow" />
+            <ImageView android:id="@+id/wb_q3" style="@style/WbQueueRow" />
+            <ImageView android:id="@+id/wb_q4" style="@style/WbQueueRow" />
         </LinearLayout>
     </FrameLayout>
 

@@ -37,11 +37,6 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
-        // The home-screen widget: what's playing (Dart → widget). Its buttons come back on the same channel.
-        MethodChannel(messenger, "wreckbox/widget").setMethodCallHandler { call, result ->
-            if (call.method == "update") PlayerWidget.update(applicationContext, call.arguments as Map<*, *>)
-            result.success(null)
-        }
         // Spectrum of what this phone plays, for the full-screen visualiser.
         EventChannel(messenger, "wreckbox/visualizer/fft").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(args: Any?, sink: EventChannel.EventSink) { fftSink = sink }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same look as the default theme, minus the system action bar: the app draws its own headers
+         (the bar used to cover the Home header and the Accounts button). -->
+    <style name="Theme.WreckBoxPlayer" parent="@android:style/Theme.DeviceDefault">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">#FF0B0A0E</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

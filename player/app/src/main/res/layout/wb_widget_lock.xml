@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The lock-screen widget: the body's shell as a slab, the LCD (clock, badges, title, artist), the seek bar and a
+     row of keys — previous, play, next, like, shuffle. Same 14 dp gutter as wb_widget.xml; 202 dp tall. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="202dp">
+
+    <ImageView android:id="@+id/wb_lock_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@null" android:scaleType="fitXY" />
+
+    <ImageView
+        android:id="@+id/wb_lcd"
+        android:layout_width="match_parent"
+        android:layout_height="104dp"
+        android:layout_margin="14dp"
+        android:contentDescription="Open WreckBox Player"
+        android:scaleType="fitXY" />
+
+    <ImageView
+        android:id="@+id/wb_clock"
+        android:layout_width="116dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="22dp"
+        android:layout_marginTop="20dp"
+        android:contentDescription="@null"
+        android:scaleType="fitStart" />
+
+    <ProgressBar
+        android:id="@+id/wb_progress"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginStart="14dp"
+        android:layout_marginTop="126dp"
+        android:layout_marginEnd="14dp"
+        android:max="1000"
+        android:progressDrawable="@drawable/wb_seek" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="14dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginBottom="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <ImageView android:id="@+id/wb_shuffle" android:layout_width="0dp" android:layout_height="34dp" android:layout_weight="1" android:background="@drawable/wb_chip" android:contentDescription="Shuffle" android:scaleType="center" />
+        <ImageButton android:id="@+id/wb_prev" android:layout_width="0dp" android:layout_height="40dp" android:layout_marginStart="6dp" android:layout_weight="1" android:background="@drawable/wb_chip" android:contentDescription="Previous" android:scaleType="center" />
+        <ImageButton android:id="@+id/wb_play" android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="8dp" android:layout_marginEnd="8dp" android:background="@drawable/wb_play" android:contentDescription="Play / pause" android:padding="14dp" android:scaleType="fitCenter" android:src="@drawable/wb_icb_play" />
+        <ImageButton android:id="@+id/wb_next" android:layout_width="0dp" android:layout_height="40dp" android:layout_marginEnd="6dp" android:layout_weight="1" android:background="@drawable/wb_chip" android:contentDescription="Next" android:scaleType="center" />
+        <ImageView android:id="@+id/wb_like" android:layout_width="0dp" android:layout_height="34dp" android:layout_weight="1" android:background="@drawable/wb_chip" android:contentDescription="Like" android:scaleType="center" />
+    </LinearLayout>
+</FrameLayout>

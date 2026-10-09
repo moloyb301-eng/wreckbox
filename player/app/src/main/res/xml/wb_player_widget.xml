@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- WreckBox player widget: 4×3 by default (the bottom row is where the drawers open). -->
+<!-- WreckBox Player widget: 4×4 on the home screen (the bottom part is where the drawers open); a compact version on
+     the lock screen (Android's keyguard widgets, where the phone supports them). -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="280dp"
     android:minHeight="180dp"
@@ -10,6 +11,7 @@
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/wb_widget"
+    android:initialKeyguardLayout="@layout/wb_widget_lock"
     android:previewLayout="@layout/wb_widget"
     android:description="@string/wb_widget_description"
-    android:widgetCategory="home_screen" />
+    android:widgetCategory="home_screen|keyguard" />
