@@ -203,6 +203,9 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     /** Drops the songs autoplay added after the current one (Up next → Clear autoplay). */
     fun clearAutoplay() {
         val cur = current()
+        radioGen++ // an autoplay fetch still in flight must not add its songs back
+        radioJob = null
+        autoplayHeldFor = cur?.key // don't refill for this song; the next song starts autoplay again
         queue = queue.filterIndexed { i, t -> i <= index || t.key !in radioKeys }
         original = original?.filter { it.key !in radioKeys || it.key == cur?.key }
         index = queue.indexOfFirst { it.key == cur?.key }
@@ -408,8 +411,12 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
      * On the last or second-last song (and not repeating): fetch songs similar to the one playing and add them to the
      * queue, so a single searched song becomes a radio and a finished playlist carries on.
      */
+    private var autoplayHeldFor: String? = null
+
     private fun maybeAutoplay() {
         val seed = current() ?: return
+        if (seed.key == autoplayHeldFor) return // the user cleared autoplay while this song plays
+        autoplayHeldFor = null
         if (!autoplay || repeat != Player.REPEAT_MODE_OFF || index < queue.size - 2 || radioJob != null) return
         val gen = radioGen
         radioJob = scope.launch {
