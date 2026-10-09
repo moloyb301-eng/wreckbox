@@ -37,6 +37,7 @@ class PlayerService : MediaSessionService() {
         log = File(getExternalFilesDir(null), "player.log")
         if (BuildConfig.TEST_COMMANDS) android.webkit.WebView.setWebContentsDebuggingEnabled(true) // inspect the hidden pages over USB while testing
         AdBlock.enabled = getSharedPreferences("settings", MODE_PRIVATE).getBoolean("adblock", true)
+        Sync.init(this)
         player = HybridPlayer(this) { holdLocks(it) }
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).putExtra("page", "now"),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

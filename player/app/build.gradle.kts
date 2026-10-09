@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,10 +14,26 @@ android {
         applicationId = "local.wreckbox.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        // USB test commands (MainActivity.test) — on while the player is being built; off for friends' builds.
-        buildConfigField("boolean", "TEST_COMMANDS", "true")
+        versionCode = 2
+        versionName = "0.2.0"
+        // USB test commands (MainActivity.test), WebView debugging and player.log: only in test builds
+        // (./gradlew assembleRelease -PwbTest), never in the builds friends download.
+        buildConfigField("boolean", "TEST_COMMANDS", if (project.hasProperty("wbTest")) "true" else "false")
+    }
+
+    // Signed with the WreckBox release key (the main app's: app/android/key.properties, kept out of the repo) so
+    // updates install over each other on friends' phones; without it (someone else's checkout), the debug key.
+    val keyProps = Properties().apply {
+        val f = rootProject.file("../app/android/key.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    signingConfigs {
+        if (keyProps.getProperty("storeFile") != null) create("release") {
+            storeFile = file(keyProps.getProperty("storeFile"))
+            storePassword = keyProps.getProperty("storePassword")
+            keyAlias = keyProps.getProperty("keyAlias")
+            keyPassword = keyProps.getProperty("keyPassword")
+        }
     }
 
     buildTypes {
@@ -23,7 +41,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     buildFeatures { compose = true; buildConfig = true }

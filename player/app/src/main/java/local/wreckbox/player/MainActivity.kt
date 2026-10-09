@@ -431,6 +431,8 @@ fun HomePage(player: HybridPlayer, openSettings: () -> Unit, openPlaylist: (Stri
     val data by lib.data.collectAsState()
     val ui by player.ui.collectAsState()
     var local by remember { mutableStateOf<List<Track>>(emptyList()) }
+    val updateVersion by Updates.available.collectAsState()
+    LaunchedEffect(Unit) { Updates.check(c) }
     // Cookies may not be readable on the very first frame, so check again shortly.
     var signedIn by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
@@ -451,6 +453,19 @@ fun HomePage(player: HybridPlayer, openSettings: () -> Unit, openPlaylist: (Stri
             Row(Modifier.fillMaxWidth().padding(20.dp, 14.dp, 14.dp, 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Wordmark() }
                 RoundButton(Icons.Filled.Tune, "Accounts & settings", onClick = openSettings)
+            }
+        }
+        updateVersion?.let { v ->
+            item {
+                Row(Modifier.padding(16.dp, 12.dp, 16.dp, 0.dp).fillMaxWidth().smartGlass().clickable {
+                    c.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Updates.PAGE)))
+                }.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("WreckBox Player $v is out", style = W.ui(17.sp, FontWeight.Bold))
+                        Text("You have ${BuildConfig.VERSION_NAME}. Tap to download the update.", style = W.ui(13.sp), color = W.text2)
+                    }
+                    Icon(Icons.Filled.SystemUpdate, null, Modifier.size(22.dp), tint = W.text)
+                }
             }
         }
         if (!signedIn) item {
@@ -548,6 +563,8 @@ fun SettingsSheet(close: () -> Unit) {
                         else Pill("Sign in", style = PillStyle.SMART) { login.launch(Intent(c, LoginActivity::class.java).putExtra("service", s.name)) }
                     }
                 }
+                DotLabel("WreckBox", Modifier.padding(top = 18.dp, bottom = 10.dp))
+                WreckBoxLink()
                 DotLabel("Playback", Modifier.padding(top = 18.dp, bottom = 10.dp))
                 val pm = c.getSystemService(PowerManager::class.java)
                 Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -578,6 +595,51 @@ fun SettingsSheet(close: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** Settings → WreckBox: link with a code, then playlists sync by themselves. */
+@Composable
+fun WreckBoxLink() {
+    val s by Sync.state.collectAsState()
+    Column(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp)) {
+        when {
+            s.linked -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).background(W.lilac, CircleShape))
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text("Linked to WreckBox", style = W.ui(15.sp, FontWeight.SemiBold))
+                        Text(s.email + (if (s.lastSync > 0) " · synced ${android.text.format.DateUtils.getRelativeTimeSpanString(s.lastSync)}" else ""),
+                            style = W.ui(12.sp), color = W.text2)
+                    }
+                }
+                Text("Your playlists and likes go to WreckBox, which downloads their songs in FLAC on your computer.",
+                    Modifier.padding(top = 8.dp), style = W.ui(12.sp), color = W.text3)
+                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill("Sync now", Icons.Filled.Sync, PillStyle.SMART) { Sync.push() }
+                    Pill("Unlink") { Sync.unlink() }
+                }
+            }
+            s.code != null -> {
+                Text("Enter this code in WreckBox", style = W.ui(15.sp, FontWeight.SemiBold))
+                Lcd(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { LcdText(s.code!!, size = 30.sp) }
+                }
+                Text("On your Mac: WreckBox → Add playlist → WreckBox Player → type the code. Waiting…",
+                    style = W.ui(12.sp), color = W.text2)
+                Row(Modifier.padding(top = 10.dp)) { Pill("Cancel") { Sync.cancelLinking() } }
+            }
+            else -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Link to WreckBox", style = W.ui(15.sp, FontWeight.SemiBold))
+                        Text("Download your playlists in FLAC with the WreckBox app", style = W.ui(12.sp), color = W.text2)
+                    }
+                    Pill("Link", style = PillStyle.SMART) { Sync.startLinking() }
+                }
+            }
+        }
+        s.error?.let { Text(it, Modifier.padding(top = 8.dp), style = W.ui(12.sp), color = W.peach) }
     }
 }
 
@@ -654,7 +716,9 @@ fun PlaylistsPage(open: (String) -> Unit) {
             }
             Row(Modifier.padding(16.dp, 4.dp, 16.dp, 8.dp).fillMaxWidth().smartGlass(RoundedCornerShape(18.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Sync, null, tint = W.text, modifier = Modifier.size(20.dp))
-                Text("Saved on this phone. Linking the WreckBox app (to sync and download in FLAC) is coming next.",
+                val sync by Sync.state.collectAsState()
+                Text(if (sync.linked) "Saved on this phone and synced to WreckBox (${sync.email}) — your computer downloads them in FLAC."
+                    else "Saved on this phone. Link WreckBox in ⚙ to download them in FLAC on your computer.",
                     Modifier.padding(start = 12.dp), style = W.ui(12.5.sp), color = W.text2)
             }
         }

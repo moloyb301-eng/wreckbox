@@ -11,6 +11,8 @@
 // Computers: each desktop registers its current tunnel URL + a private ticket secret. Phones never see that secret:
 // they ask for a short-lived ticket (HMAC-signed with it) and present that to the computer.
 // Requests: phones can queue "download this" for a computer that's offline; it collects them when it comes back.
+// WreckBox Player: the Android player links to an account with a code it shows (entered in WreckBox, signed in). It
+// then gets a token that can ONLY read and write its own playlists (u:<user>:player) — never the account itself.
 
 const JSON_HEADERS = { "content-type": "application/json" };
 const BLOBS = new Set(["library", "state", "analysis"]);
@@ -35,6 +37,28 @@ export default {
       if (route === "POST /v1/shares/open") return await openShare(request, env);
       // The one link for friends: the newest Mac and Android downloads, whichever was released last.
       if (route === "GET /download") return await downloadPage(env, ctx);
+      // WreckBox Player: the page friends get, and its linking (the Player has no account of its own)
+      if (route === "GET /player") return await playerPage(env, ctx);
+      if (route === "POST /v1/player/pair") return await playerPair(request, env);
+      if (route === "POST /v1/player/claim") return await playerClaim(request, env);
+      if (url.pathname === "/v1/player/playlists" && request.headers.get("x-wreckbox-player")) {
+        const p = await playerAuthed(request, env);
+        if (!p) return json({ error: "This player isn't linked any more — link it again." }, 401);
+        if (request.method === "PUT") {
+          const body = await request.text();
+          if (body.length > 2 * 1024 * 1024) return json({ error: "too large" }, 413);
+          const d = JSON.parse(body);
+          if (!Array.isArray(d.playlists)) return json({ error: "playlists required" }, 400);
+          const saved = { updated: Date.now(), player: p.name, playlists: d.playlists.slice(0, 500), likes: Array.isArray(d.likes) ? d.likes.slice(0, 5000) : [] };
+          await env.LIBRARY.put(`u:${p.user}:player`, JSON.stringify(saved));
+          return json({ ok: true, updated: saved.updated });
+        }
+        if (request.method === "GET") return new Response((await env.LIBRARY.get(`u:${p.user}:player`)) || "{}", { headers: JSON_HEADERS });
+        if (request.method === "DELETE") {
+          await env.LIBRARY.delete(`ptok:${await sha256(bearer(request))}`);
+          return json({ ok: true });
+        }
+      }
       const landing = url.pathname.match(/^\/s\/([A-Za-z0-9-]{10,40})$/);
       if (landing && request.method === "GET") return sharePage(landing[1]);
 
@@ -110,6 +134,9 @@ export default {
         await env.DB.prepare("UPDATE shares SET revoked = 1 WHERE id = ? AND owner = ?").bind(share[1], user.id).run();
         return json({ ok: true });
       }
+      // WreckBox (signed in) approves a Player's code, and reads what the Player saved.
+      if (route === "POST /v1/player/approve") return await playerApprove(request, env, user);
+      if (route === "GET /v1/player/playlists") return new Response((await env.LIBRARY.get(`u:${user.id}:player`)) || "{}", { headers: JSON_HEADERS });
       if (route === "POST /v1/requests") return await addRequest(request, env, user);
       if (route === "GET /v1/requests") return await takeRequests(url, env, user);
       const dev = url.pathname.match(/^\/v1\/devices\/([^/]+)$/);
@@ -279,6 +306,59 @@ async function claimLink(request, env) {
 
 const callbackUrl = (url) => `${url.origin}/v1/auth/google/callback`;
 
+// MARK: WreckBox Player linking
+
+const PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I: easy to read and type
+
+/// The Player asks for a code to show: 8 characters for a person to type, plus a long secret only the Player keeps
+/// (the code alone can't claim the link). Valid 15 minutes.
+async function playerPair(request, env) {
+  const ip = request.headers.get("CF-Connecting-IP") || "?";
+  const k = `pp:${ip}:${new Date().toISOString().slice(0, 13)}`;
+  const row = await env.DB.prepare("SELECT n FROM login_attempts WHERE key = ?").bind(k).first();
+  if (row && row.n >= 30) return json({ error: "Too many codes — try again in an hour." }, 429);
+  await env.DB.prepare("INSERT INTO login_attempts (key, n) VALUES (?, 1) ON CONFLICT (key) DO UPDATE SET n = n + 1").bind(k).run();
+  const { name } = await request.json().catch(() => ({}));
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const code = [...bytes].map((b) => PAIR_ALPHABET[b % PAIR_ALPHABET.length]).join("");
+  const secret = hex(crypto.getRandomValues(new Uint8Array(32)));
+  await env.LIBRARY.put(`pair:${code}`, JSON.stringify({ secret: await sha256(secret), name: clip(name || "WreckBox Player", 60), user: null }), { expirationTtl: 900 });
+  return json({ code: `${code.slice(0, 4)}-${code.slice(4)}`, secret, expires: Date.now() + 900000 });
+}
+
+const normPair = (c) => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/// Signed-in WreckBox enters the code the Player shows.
+async function playerApprove(request, env, user) {
+  const code = normPair((await request.json()).code);
+  const key = `pair:${code}`;
+  const saved = code.length === 8 && (await env.LIBRARY.get(key, "json"));
+  if (!saved) return json({ error: "That code isn't valid any more — get a new one in WreckBox Player (Settings → Link to WreckBox)." }, 400);
+  if (saved.user && saved.user !== user.id) return json({ error: "That code was already used." }, 409);
+  saved.user = user.id;
+  await env.LIBRARY.put(key, JSON.stringify(saved), { expirationTtl: 900 });
+  return json({ ok: true, name: saved.name });
+}
+
+/// The Player checks back with its code + secret: once approved, it gets its playlists-only token (one use).
+async function playerClaim(request, env) {
+  const { code, secret } = await request.json();
+  const key = `pair:${normPair(code)}`;
+  const saved = await env.LIBRARY.get(key, "json");
+  if (!saved || !timingSafeEqual(await sha256(String(secret || "")), saved.secret)) return json({ error: "That code expired — get a new one." }, 400);
+  if (!saved.user) return json({ pending: true });
+  await env.LIBRARY.delete(key);
+  const token = hex(crypto.getRandomValues(new Uint8Array(32)));
+  await env.LIBRARY.put(`ptok:${await sha256(token)}`, JSON.stringify({ user: saved.user, name: saved.name, created: Date.now() }));
+  const u = await env.DB.prepare("SELECT email FROM users WHERE id = ?").bind(saved.user).first();
+  return json({ token, email: u ? u.email : "" });
+}
+
+async function playerAuthed(request, env) {
+  const t = bearer(request);
+  return t ? env.LIBRARY.get(`ptok:${await sha256(t)}`, "json") : null;
+}
+
 // MARK: tickets + requests
 
 async function ticket(env, user, deviceId) {
@@ -357,6 +437,7 @@ async function openShare(request, env) {
 
 const RELEASES_REPO = "moloyb301-eng/wreckbox-releases";
 const MAC_ASSET = "WreckBox-mac-arm64.zip";
+const PLAYER_ASSET_PREFIX = "WreckBox-Player"; // released as player-v…, never the "latest" release
 
 /// Mac and Android ship separately (Mac releases are tagged mac-v…, phone releases v…), so the newest of each can
 /// be in different releases: this page finds both. GitHub's answer is cached for 5 minutes.
@@ -384,7 +465,7 @@ async function downloadPage(env, ctx) {
     return best;
   };
   const mac = pick((n) => n === MAC_ASSET);
-  const android = pick((n) => n.endsWith(".apk"));
+  const android = pick((n) => n.endsWith(".apk") && !n.startsWith(PLAYER_ASSET_PREFIX));
   const mb = (n) => `${Math.round(n / 1048576)} MB`;
   const card = (title, sub, d, steps) => d ? `<div class="card"><h2>${title}</h2><p class="sub">${sub}</p>
 <a class="b" href="${d.url}">Download ${title} · ${d.version}</a><p class="meta">${mb(d.size)} · ${new Date(d.date).toDateString().slice(4)}</p>
@@ -409,7 +490,67 @@ ${card("Android", "Android 7+", android, [
   "Open the .apk. Allow installs from your browser or Files when asked.",
   "If Play Protect warns: <b>More details → Install anyway</b>.",
   "In the app, tap <b>Allow</b> for file access."])}
-</div><p class="foot">Updates show up inside the apps. Free and open source — <a href="https://github.com/moloyb301-eng/wreckbox-mac">Mac</a> · <a href="https://github.com/moloyb301-eng/wreckbox">Android</a>.</p></div></body></html>`;
+</div><p class="foot">Just want a light music player for your phone? <a href="/player">WreckBox Player</a> — your phone's songs, YouTube Music and Spotify in one queue.</p>
+<p class="foot">Updates show up inside the apps. Free and open source — <a href="https://github.com/moloyb301-eng/wreckbox-mac">Mac</a> · <a href="https://github.com/moloyb301-eng/wreckbox">Android</a>.</p></div></body></html>`;
+  const out = new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
+  if (res.ok) ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
+  return out;
+}
+
+/// The page to share WreckBox Player: what it is, the newest APK (releases tagged player-v…), how to install.
+async function playerPage(env, ctx) {
+  const cacheKey = new Request("https://wreckbox-cache/player-page");
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+  const res = await fetch(`https://api.github.com/repos/${RELEASES_REPO}/releases?per_page=40`, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "wreckbox-api" },
+  });
+  const releases = res.ok ? await res.json() : [];
+  let apk = null;
+  for (const r of releases) {
+    if (r.draft || !/^player-v/.test(r.tag_name || "")) continue;
+    const a = (r.assets || []).find((x) => x.name.startsWith(PLAYER_ASSET_PREFIX) && x.name.endsWith(".apk"));
+    if (a) { apk = { version: r.tag_name.replace(/^player-v/, ""), url: a.browser_download_url, size: a.size, date: r.published_at }; break; }
+  }
+  const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+  const feats = [
+    ["One queue, three sources", "Songs on your phone, YouTube Music and Spotify, mixed in one queue."],
+    ["Plays with the screen off", "Lock screen, notification, headphone and Bluetooth controls."],
+    ["Search everything at once", "By song, artist or a line from the lyrics."],
+    ["Song radio", "Tap one song; it keeps going with music like it."],
+    ["No ads on YouTube", "Ad blocking is on by default. Your own accounts, no keys, no sign-up."],
+    ["Light", `About ${apk ? mb(apk.size) : "3 MB"}. EQ, widget, real-time spectrum, FLAC and bitrate shown.`],
+  ];
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WreckBox Player</title><meta name="description" content="A light Android music player: your phone's songs, YouTube Music and Spotify in one queue.">
+<meta property="og:title" content="WreckBox Player"><meta property="og:description" content="Your phone's songs, YouTube Music and Spotify in one queue. Free, no ads.">
+<link href="https://fonts.googleapis.com/css2?family=Doto:wght@700;900&family=Urbanist:wght@400;600;700&display=swap" rel="stylesheet">
+<style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#08080A;color:#f0f0f0;font:16px Urbanist,-apple-system,system-ui,sans-serif}
+.w{max-width:880px;margin:0 auto;padding:48px 16px}
+.hero{position:relative;overflow:hidden;border-radius:28px;padding:40px 28px;background:radial-gradient(120% 140% at 100% 0%,rgba(187,150,218,.22),transparent 60%),radial-gradient(90% 120% at 0% 100%,rgba(239,175,134,.14),transparent 60%),rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09)}
+h1{font:900 clamp(28px,7vw,44px) Doto,monospace;letter-spacing:3px;margin:0 0 10px;background:linear-gradient(90deg,#A9C8F0,#EFAF86,#BB96DA);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{color:#b4b4b4;margin:0 0 26px;font-size:18px;max-width:560px;line-height:1.45}
+a.b{display:inline-block;padding:14px 24px;border-radius:999px;background:linear-gradient(135deg,#A9C8F0,#EFAF86,#BB96DA);color:#0a0a0c;text-decoration:none;font-weight:700;box-shadow:0 8px 30px rgba(187,150,218,.25)}
+.meta{color:#777;font-size:13px;margin:10px 0 0;font-family:Doto,monospace;letter-spacing:1px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:22px 0}
+.f{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:18px}
+.f b{display:block;margin-bottom:4px}.f span{color:#9a9a9a;font-size:14px;line-height:1.45}
+h2{font:700 13px Doto,monospace;letter-spacing:2px;color:#9a9a9a;margin:30px 0 10px;text-transform:uppercase}
+ol{color:#c4c4c4;padding-left:20px;line-height:1.6;margin:0}a{color:#BB96DA}.foot{color:#666;font-size:13px;margin-top:28px;line-height:1.5}</style></head>
+<body><div class="w"><div class="hero"><h1>WRECKBOX PLAYER</h1>
+<p class="lead">A light music player for Android: your phone's songs, YouTube Music and Spotify in one queue — and it keeps playing with the screen off.</p>
+${apk ? `<a class="b" href="${apk.url}">Download for Android · ${apk.version}</a><p class="meta">${mb(apk.size)} · ${new Date(apk.date).toDateString().slice(4)} · Android 8+</p>`
+      : `<p class="meta">The first version is on its way — check back soon.</p>`}</div>
+<div class="grid">${feats.map(([t, d]) => `<div class="f"><b>${t}</b><span>${d}</span></div>`).join("")}</div>
+<h2>Install</h2><ol>
+<li>Open the downloaded <b>.apk</b> and allow installs from your browser when asked (open this page in Chrome, not inside WhatsApp or Instagram).</li>
+<li>If Play Protect warns, tap <b>More details → Install anyway</b>.</li>
+<li>Open the app → <b>⚙</b> → sign in to YouTube Music and/or Spotify (optional — your phone's songs work without).</li>
+<li>Tap <b>Keep playing with the screen off → Allow</b>. On Samsung, never put it in "deep sleeping apps".</li></ol>
+<h2>Good to know</h2><ol>
+<li>Signing in is only for YouTube Music and Spotify, inside the app — no WreckBox account needed.</li>
+<li>Have the WreckBox app? Link the Player (⚙ → Link to WreckBox) and your playlists download in FLAC there.</li></ol>
+<p class="foot">Free and open source. <a href="https://github.com/moloyb301-eng/wreckbox/tree/main/player">Source</a> · <a href="/download">WreckBox for Mac &amp; Android</a></p></div></body></html>`;
   const out = new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
   if (res.ok) ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
   return out;
