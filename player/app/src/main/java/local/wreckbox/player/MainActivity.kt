@@ -91,6 +91,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The service's screen on/off receiver can miss a broadcast (e.g. around an update/restart) and leave the
+        // clocks frozen as "screen off" — an app that is in front is, by definition, on a lit screen.
+        Screen.on.value = getSystemService(android.os.PowerManager::class.java).isInteractive
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getStringExtra("page") == "now") page = Page.NOW
