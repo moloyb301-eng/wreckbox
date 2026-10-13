@@ -39,6 +39,8 @@ export default {
       if (route === "GET /download") return await downloadPage(env, ctx);
       // WreckBox Player: the page friends get, and its linking (the Player has no account of its own)
       if (route === "GET /player") return await playerPage(env, ctx);
+      // What the Player asks each time it opens: the newest version (Updates.kt).
+      if (route === "GET /v1/player/latest") return new Response(JSON.stringify((await newestPlayer(env, ctx)) || {}), { headers: { ...JSON_HEADERS, "cache-control": "public, max-age=60" } });
       if (route === "POST /v1/player/pair") return await playerPair(request, env);
       if (route === "POST /v1/player/claim") return await playerClaim(request, env);
       if (url.pathname === "/v1/player/playlists" && request.headers.get("x-wreckbox-player")) {
@@ -497,21 +499,39 @@ ${card("Android", "Android 7+", android, [
   return out;
 }
 
-/// The page to share WreckBox Player: what it is, the newest APK (releases tagged player-v…), how to install.
-async function playerPage(env, ctx) {
-  const cacheKey = new Request("https://wreckbox-cache/player-page");
+/// The newest Player APK (releases tagged player-v…): GitHub asked at most once a minute; if GitHub is busy or
+/// rate-limits us, the last good answer (kept in KV) is used, so the page and the app never lose the download.
+async function newestPlayer(env, ctx) {
+  const cacheKey = new Request("https://wreckbox-cache/player-latest");
   const cached = await caches.default.match(cacheKey);
-  if (cached) return cached;
-  const res = await fetch(`https://api.github.com/repos/${RELEASES_REPO}/releases?per_page=40`, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "wreckbox-api" },
-  });
-  const releases = res.ok ? await res.json() : [];
+  if (cached) return cached.json();
   let apk = null;
-  for (const r of releases) {
-    if (r.draft || !/^player-v/.test(r.tag_name || "")) continue;
-    const a = (r.assets || []).find((x) => x.name.startsWith(PLAYER_ASSET_PREFIX) && x.name.endsWith(".apk"));
-    if (a) { apk = { version: r.tag_name.replace(/^player-v/, ""), url: a.browser_download_url, size: a.size, date: r.published_at }; break; }
+  try {
+    const res = await fetch(`https://api.github.com/repos/${RELEASES_REPO}/releases?per_page=40`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "wreckbox-api" },
+    });
+    if (res.ok) {
+      for (const r of await res.json()) {
+        if (r.draft || !/^player-v/.test(r.tag_name || "")) continue;
+        const a = (r.assets || []).find((x) => x.name.startsWith(PLAYER_ASSET_PREFIX) && x.name.endsWith(".apk"));
+        if (a) { apk = { version: r.tag_name.replace(/^player-v/, ""), url: a.browser_download_url, size: a.size, date: r.published_at }; break; }
+      }
+    }
+  } catch (e) {}
+  if (apk) {
+    ctx.waitUntil(Promise.all([
+      caches.default.put(cacheKey, new Response(JSON.stringify(apk), { headers: { "cache-control": "public, max-age=60" } })),
+      env.LIBRARY.put("player:latest", JSON.stringify(apk)),
+    ]));
+    return apk;
   }
+  const kept = await env.LIBRARY.get("player:latest");
+  return kept ? JSON.parse(kept) : null;
+}
+
+/// The page to share WreckBox Player: what it is, the newest APK, how to install.
+async function playerPage(env, ctx) {
+  const apk = await newestPlayer(env, ctx);
   const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
   const feats = [
     ["One queue, three sources", "Songs on your phone, YouTube Music and Spotify, mixed in one queue."],
@@ -551,9 +571,7 @@ ${apk ? `<a class="b" href="${apk.url}">Download for Android · ${apk.version}</
 <li>Signing in is only for YouTube Music and Spotify, inside the app — no WreckBox account needed.</li>
 <li>Have the WreckBox app? Link the Player (⚙ → Link to WreckBox) and your playlists download in FLAC there.</li></ol>
 <p class="foot">Free and open source. <a href="https://github.com/moloyb301-eng/wreckbox/tree/main/player">Source</a> · <a href="/download">WreckBox for Mac &amp; Android</a></p></div></body></html>`;
-  const out = new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
-  if (res.ok) ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
-  return out;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" } });
 }
 
 /// What a share link shows in a browser: open it in WreckBox (or get the app).

@@ -70,6 +70,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -108,6 +109,8 @@ class MainActivity : ComponentActivity() {
         // The service's screen on/off receiver can miss a broadcast (e.g. around an update/restart) and leave the
         // clocks frozen as "screen off" — an app that is in front is, by definition, on a lit screen.
         Screen.on.value = getSystemService(android.os.PowerManager::class.java).isInteractive
+        // A new version shows the moment the app comes back to the front.
+        lifecycleScope.launch { Updates.check(this@MainActivity) }
     }
 
     override fun onNewIntent(intent: Intent) {
