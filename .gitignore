@@ -18,3 +18,8 @@ bug-reports/
 app/test/goldens/
 
 api/.wrangler/
+
+# WreckBox Car build outputs (images, downloads, venv)
+car/build/
+car/dist/
+player/.kotlin/

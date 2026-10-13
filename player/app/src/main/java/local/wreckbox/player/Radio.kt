@@ -70,13 +70,21 @@ object Radio {
         }
     }
 
-    /** One song of the panel: "Artist • Album • Year" byline; fan uploads ("… views") are skipped. */
+    /**
+     * One song of the panel: "Artist • Album • Year" byline. Fan uploads ("… views" with no artist link) are skipped; a
+     * video by the artist's own channel stays (a mix seeded from a music video is all videos — skipping every "views"
+     * item emptied it).
+     */
     private fun item(r: JSONObject): Track? {
         val id = r.optString("videoId").ifEmpty { return null }
         val title = r.optJSONObject("title")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: return null
         val runs = r.optJSONObject("longBylineText")?.optJSONArray("runs") ?: JSONArray()
         val parts = (0 until runs.length()).map { runs.getJSONObject(it) }
-        if (parts.any { it.optString("text").endsWith(" views") }) return null
+        val official = parts.any { p ->
+            p.optJSONObject("navigationEndpoint")?.optJSONObject("browseEndpoint")?.optJSONObject("browseEndpointContextSupportedConfigs")
+                ?.optJSONObject("browseEndpointContextMusicConfig")?.optString("pageType") in setOf("MUSIC_PAGE_TYPE_ARTIST", "MUSIC_PAGE_TYPE_USER_CHANNEL")
+        }
+        if (parts.any { it.optString("text").endsWith(" views") } && !official) return null
         val artists = mutableListOf<String>()
         var album: String? = null
         for (p in parts) {

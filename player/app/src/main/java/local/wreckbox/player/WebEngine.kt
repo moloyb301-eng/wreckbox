@@ -107,6 +107,7 @@ open class WebPage(context: Context, val service: Service) {
     open fun onState(s: WebState) {}
     open fun onEnded(why: String) {}
     open fun onResults(json: String) {}
+    open fun onData(json: String) {}
 
     fun open(url: String) = main.post { view.loadUrl(url) }
 
@@ -142,6 +143,9 @@ open class WebPage(context: Context, val service: Service) {
 
         @JavascriptInterface
         fun results(json: String) = main.post { onResults(json) }
+
+        @JavascriptInterface
+        fun data(json: String) = main.post { onData(json) }
 
         /** The page's spectrum: 8 comma-separated levels 0..1. */
         @JavascriptInterface
@@ -500,19 +504,67 @@ class WebEngine(context: Context, service: Service, private val state: (WebState
 /** Spotify search through a second hidden, signed-in page (no developer key needed). */
 class SpotifySearch private constructor(context: Context) : WebPage(context, Service.SPOTIFY) {
     private var pending: CompletableDeferred<List<Track>>? = null
-    private val idle = Runnable { if (pending == null) park() }
+    private var pendingData: CompletableDeferred<JSONObject>? = null
+    private val idle = Runnable { if (pending == null && pendingData == null) park() }
+
+    init {
+        // Notes the web player's own sign-in token as it talks to Spotify, so [library] can ask for your history with it.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            main.post { WebViewCompat.addDocumentStartJavaScript(view, TOKEN_SCRIPT, setOf(Service.SPOTIFY.origin)) }
+        }
+    }
+
+    /**
+     * Your Spotify listening, read with the web player's token: recently played, top songs (3 ranges), top artists,
+     * saved songs (up to 1,000). Each song slimmed to id / name / artists / album / art / dur (/ at).
+     */
+    suspend fun library(): JSONObject {
+        pendingData?.cancel()
+        val d = CompletableDeferred<JSONObject>()
+        pendingData = d
+        open("https://open.spotify.com/collection/tracks")
+        main.postDelayed({ main.post { view.evaluateJavascript(LIBRARY_SCRIPT, null) } }, 1500)
+        return d.await()
+    }
+
+    override fun onData(json: String) {
+        val j = runCatching { JSONObject(json) }.getOrElse { JSONObject().put("error", "unreadable answer") }
+        live = !j.has("error")
+        pendingData?.complete(j)
+        pendingData = null
+        main.removeCallbacks(idle)
+        main.postDelayed(idle, 120_000)
+    }
+
+    /** The page is loaded and showing Spotify (not parked): a new search can move inside it instead of reloading it. */
+    private var live = false
 
     suspend fun search(q: String): List<Track> {
         pending?.cancel()
         val d = CompletableDeferred<List<Track>>()
         pending = d
-        open("https://open.spotify.com/search/${URLEncoder.encode(q, "UTF-8").replace("+", "%20")}/tracks")
-        main.postDelayed({ js(read(q)) }, 1500)
+        val path = "/search/${URLEncoder.encode(q, "UTF-8").replace("+", "%20")}/tracks"
+        if (live) {
+            // Spotify's page is a single-page app: going to the new search inside it skips loading the whole player
+            // again (3–5 s → well under one).
+            main.post {
+                // Remember the old first result: until the list changes, what's on screen is still the last search.
+                view.evaluateJavascript("(function(){var a=document.querySelector('[data-testid=\"tracklist-row\"] a[href*=\"/track/\"]');window.__wbPrev=a?a.getAttribute('href'):null;" +
+                    "history.pushState({}, '', ${JSONObject.quote(path)}); dispatchEvent(new PopStateEvent('popstate'));})()", null)
+                main.postDelayed({ js(read(q)) }, 300)
+            }
+        } else {
+            open("https://open.spotify.com$path")
+            main.postDelayed({ js(read(q)) }, 1500)
+        }
         return d.await()
     }
 
+    override fun park() { live = false; super.park() }
+
     override fun onResults(json: String) {
-        if (json == "null") { pending?.completeExceptionally(IllegalStateException("search page didn't load")); pending = null; return }
+        if (json == "null") { live = false; pending?.completeExceptionally(IllegalStateException("search page didn't load")); pending = null; return }
+        live = true
         val a = runCatching { JSONArray(json) }.getOrNull() ?: return
         val list = (0 until a.length()).mapNotNull { i ->
             val o = a.getJSONObject(i)
@@ -530,7 +582,7 @@ class SpotifySearch private constructor(context: Context) : WebPage(context, Ser
 
     companion object {
         /**
-         * Reads the result rows once they've rendered (tries for ~10 s). Only rows of THIS query count: if the page is
+         * Reads the result rows once they've rendered (checks every 0.25 s for ~10 s). Only rows of THIS query count: if the page is
          * still an older search (or the new one never loaded, e.g. offline) the answer is empty, never stale rows.
          */
         private fun read(q: String) = """
@@ -540,7 +592,10 @@ class SpotifySearch private constructor(context: Context) : WebPage(context, Ser
               var t = setInterval(function () {
                 tries++;
                 var rows = onPage() ? document.querySelectorAll('[data-testid="tracklist-row"]') : [];
-                if (!rows.length && tries < 20) return;
+                var firstA = rows.length ? rows[0].querySelector('a[href*="/track/"]') : null;
+                var same = window.__wbPrev && firstA && firstA.getAttribute('href') === window.__wbPrev;
+                if ((!rows.length || (same && tries < 16)) && tries < 40) return;
+                window.__wbPrev = null;
                 clearInterval(t);
                 if (!onPage()) { WB.results('null'); return; } // never loaded (offline / blocked): report it, don't guess
                 var out = [];
@@ -550,12 +605,98 @@ class SpotifySearch private constructor(context: Context) : WebPage(context, Ser
                   var artists = Array.prototype.map.call(r.querySelectorAll('a[href*="/artist/"]'), function (x) { return x.textContent.trim(); });
                   var al = r.querySelector('a[href*="/album/"]');
                   var img = r.querySelector('img');
-                  var dur = ((r.textContent.match(/\d{1,2}:\d{2}/g) || ['']).pop());
+                  // The time cell on its own: the row's joined text glues "Aug 12, 2024" to "3:45" (→ "43:45").
+                  var dur = '', w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT), n;
+                  while ((n = w.nextNode())) { var t = n.nodeValue.trim(); if (/^(\d{1,2}:)?\d{1,2}:\d{2}$/.test(t)) dur = t; }
                   out.push({ id: id, title: a.textContent.trim(), artist: artists.join(', '), album: al ? al.textContent.trim() : '',
                              art: img ? img.src.replace('ab67616d00004851', 'ab67616d00001e02') : '', dur: dur });
                 });
                 WB.results(JSON.stringify(out));
-              }, 500);
+              }, 250);
+            })();
+        """.trimIndent()
+
+        private val TOKEN_SCRIPT = """
+            (function () {
+              if (window.__wbHook) return; window.__wbHook = 1;
+              function note(v) { if (v && /^Bearer /i.test(v)) window.__wbAuth = v; }
+              var f = window.fetch;
+              window.fetch = function (input, init) {
+                try {
+                  var h = init && init.headers;
+                  if (h) note(typeof h.get === 'function' ? h.get('authorization') : (h.authorization || h.Authorization));
+                  if (input && input.headers && typeof input.headers.get === 'function') note(input.headers.get('authorization'));
+                } catch (e) {}
+                return f.apply(this, arguments);
+              };
+              var set = XMLHttpRequest.prototype.setRequestHeader;
+              XMLHttpRequest.prototype.setRequestHeader = function (k, v) { try { if (String(k).toLowerCase() === 'authorization') note(v); } catch (e) {} return set.apply(this, arguments); };
+            })();
+        """.trimIndent()
+
+        /**
+         * Reads your Spotify listening from the web player's own pages (its public Web API refuses the web player's token
+         * with 429): Liked Songs (scrolled through, up to 600), your profile's "Top tracks this month" and top artists.
+         */
+        private val LIBRARY_SCRIPT = """
+            (async function () {
+              function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+              function rows() {
+                return Array.prototype.map.call(document.querySelectorAll('[data-testid="tracklist-row"]'), function (r) {
+                  var a = r.querySelector('a[href*="/track/"]'); if (!a) return null;
+                  var id = (a.getAttribute('href').match(/track\/([A-Za-z0-9]+)/) || [])[1]; if (!id) return null;
+                  var artists = Array.prototype.map.call(r.querySelectorAll('a[href*="/artist/"]'), function (x) { return x.textContent.trim(); });
+                  var al = r.querySelector('a[href*="/album/"]'), img = r.querySelector('img');
+                  // The time cell on its own: the row's joined text glues "Aug 12, 2024" to "3:45" (→ "43:45").
+                  var d = '0:00', w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT), n;
+                  while ((n = w.nextNode())) { var t = n.nodeValue.trim(); if (/^(\d{1,2}:)?\d{1,2}:\d{2}$/.test(t)) d = t; }
+                  var sec = d.split(':').reduce(function (s, p) { return s * 60 + +p; }, 0);
+                  return { id: id, name: a.textContent.trim(), artists: artists.join(', '), album: al ? al.textContent.trim() : '',
+                           art: img ? img.src.replace('ab67616d00004851', 'ab67616d00001e02') : '', dur: sec * 1000 };
+                }).filter(Boolean);
+              }
+              async function go(path, ready) {
+                if (location.pathname !== path) { history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')); }
+                for (var i = 0; i < 30; i++) { await sleep(400); if (location.pathname === path && ready()) return true; }
+                return false;
+              }
+              function scroller() {
+                var e = document.querySelector('[data-testid="track-list"]');
+                while (e && !(e.scrollHeight > e.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(e).overflowY))) e = e.parentElement;
+                return e;
+              }
+              var out = { recent: [], saved: [], top_short_term: [], artists: [] };
+              try {
+                // Liked Songs: the list only renders what's on screen, so scroll and collect.
+                await go('/collection/tracks', function () { return rows().length > 0; });
+                var seen = {}, still = 0;
+                for (var n = 0; n < 200 && out.saved.length < 600 && still < 4; n++) {
+                  var before = out.saved.length;
+                  rows().forEach(function (t) { if (!seen[t.id]) { seen[t.id] = 1; out.saved.push(t); } });
+                  still = out.saved.length === before ? still + 1 : 0;
+                  var sc = scroller(); if (!sc) break;
+                  sc.scrollTop += sc.clientHeight * 0.9;
+                  await sleep(500);
+                }
+                var u = document.querySelector('a[href*="/user/"]');
+                var me = u ? (u.getAttribute('href').match(/user\/([^/?#]+)/) || [])[1] : null;
+                if (me) {
+                  // Ready = its own heading is up (the old page's rows can linger for a moment).
+                  var main = function () { var m = document.querySelector('main'); return m ? m.innerText : ''; };
+                  if (await go('/user/' + me + '/top/tracks', function () { return main().indexOf('Top tracks') >= 0 && rows().length > 0; })) { await sleep(800); out.top_short_term = rows(); }
+                  if (await go('/user/' + me + '/top/artists', function () { return main().indexOf('Top artists') >= 0 && document.querySelector('[data-encore-id="card"] a[href*="/artist/"]'); })) {
+                    await sleep(800);
+                    var names = {};
+                    Array.prototype.forEach.call(document.querySelectorAll('[data-encore-id="card"]'), function (c) {
+                      var a = c.querySelector('a[href*="/artist/"]'); var name = a ? (a.getAttribute('title') || a.textContent || '').trim() : '';
+                      if (!name) name = (c.innerText || '').split('\n')[0].trim();
+                      if (name && !names[name]) { names[name] = 1; out.artists.push(name); }
+                    });
+                  }
+                }
+              } catch (e) { out.error = String(e); }
+              if (!out.saved.length && !out.top_short_term.length && !out.artists.length) out.error = out.error || 'nothing found — signed in to Spotify?';
+              WB.data(JSON.stringify(out));
             })();
         """.trimIndent()
 

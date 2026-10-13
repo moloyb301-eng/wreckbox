@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="wb_widget_description">Player with EQ, queue and options drawers</string>
+    <string name="island_a11y_description">Shows the WreckBox island round the camera: the song on an LED screen, tap it for the player. It only draws the island — it doesn\'t read your screen or anything you do.</string>
+    <string name="island_a11y_label">WreckBox island</string>
 </resources>

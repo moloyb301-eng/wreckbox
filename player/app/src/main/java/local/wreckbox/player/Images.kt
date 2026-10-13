@@ -24,6 +24,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Text
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -73,13 +79,29 @@ object Images {
     }
 }
 
+/**
+ * A cover. Without a picture (no URL, or it didn't load) and with a [name], a placeholder made from the name: a soft
+ * gradient in the app's colours picked by the name, and its first letter in Doto — so coverless songs and playlists
+ * don't all look the same flat grey.
+ */
 @Composable
-fun Cover(url: String?, modifier: Modifier, shape: Shape) {
+fun Cover(url: String?, modifier: Modifier, shape: Shape, name: String? = null, desaturate: Boolean = false) {
     val c = LocalContext.current
     var img by remember(url) { mutableStateOf<ImageBitmap?>(null) }
     var px by remember { mutableIntStateOf(0) }
     LaunchedEffect(url, px) { if (px > 0) img = url?.let { Images.load(c, it, px) } }
-    Box(modifier.onSizeChanged { px = maxOf(it.width, it.height) }.clip(shape).background(Color(0xFF26222E))) {
-        img?.let { Image(it, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop) }
+    Box(modifier.onSizeChanged { px = maxOf(it.width, it.height) }.clip(shape).background(Color(0xFF26222E)), contentAlignment = Alignment.Center) {
+        val pic = img
+        if (pic != null) Image(pic, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop,
+            colorFilter = if (desaturate) androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(0.15f) }) else null)
+        else if (!name.isNullOrBlank()) {
+            val h = name.hashCode()
+            val a = W.smartColors[Math.floorMod(h, 3)]
+            val b = W.smartColors[Math.floorMod(h / 3, 3)].let { if (it == a) W.smartColors[(W.smartColors.indexOf(a) + 1) % 3] else it }
+            Box(Modifier.matchParentSize().background(Brush.linearGradient(listOf(a.copy(alpha = 0.55f), b.copy(alpha = 0.25f), Color(0xFF1A1820)))))
+            val letter = name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "♪"
+            val size = with(LocalDensity.current) { (px * 0.42f).toDp().value }.coerceAtLeast(8f)
+            if (px > 0) Text(letter, style = W.dot(size.sp, FontWeight.Black), color = Color.White.copy(alpha = 0.85f))
+        }
     }
 }

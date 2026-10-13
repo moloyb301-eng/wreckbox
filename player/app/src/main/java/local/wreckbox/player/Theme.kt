@@ -8,6 +8,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +20,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +36,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -118,15 +125,118 @@ fun Modifier.glass(shape: Shape = RoundedCornerShape(W.Radius.card), tint: Color
     .clip(shape)
     .background(W.glassFill, shape)
     .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.10f), shape) else Modifier)
-    .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.White.copy(alpha = 0.03f))), shape)
+    .bezel(shape, 0.8f)
 
 /** For smart things (sync, recognised quality): the gradient, faint. */
 fun Modifier.smartGlass(shape: Shape = RoundedCornerShape(W.Radius.card)): Modifier = this
     .clip(shape)
     .background(Brush.linearGradient(W.smartColors.map { it.copy(alpha = 0.16f) }), shape)
-    .border(1.dp, Brush.linearGradient(W.smartColors.map { it.copy(alpha = 0.55f) }), shape)
+    .bezel(shape)
 
 /** The iridescent rim: a thin blue → peach → lilac ring, like the widget's shell. */
+/**
+ * The phone-frame bezel inside [shape]: a light chamfer (bright on top where the light falls, dim down the sides, a
+ * reflection along the bottom) and a dark line just inside it where the frame meets the face.
+ */
+fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBezel(shape: Shape, strength: Float = 1f) {
+    val w = size.width
+    val h = size.height
+    fun outline(sz: Size, at: Offset) = androidx.compose.ui.graphics.Path().apply {
+        addOutline(shape.createOutline(sz, layoutDirection, this@drawBezel))
+        translate(at)
+    }
+    val inset = 1.4.dp.toPx()
+    drawPath(outline(Size(w - 2 * inset, h - 2 * inset), Offset(inset, inset)),
+        Brush.verticalGradient(0f to Color.White.copy(alpha = 0.42f * strength), 0.3f to Color.White.copy(alpha = 0.16f * strength),
+            0.7f to Color.White.copy(alpha = 0.07f * strength), 1f to Color.White.copy(alpha = 0.22f * strength)),
+        style = Stroke(1.4.dp.toPx()))
+    val inner = inset + 2.dp.toPx()
+    drawPath(outline(Size(w - 2 * inner, h - 2 * inner), Offset(inner, inner)),
+        Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f * strength), Color.Black.copy(alpha = 0.30f * strength), Color.Black.copy(alpha = 0.50f * strength))),
+        style = Stroke(1.dp.toPx()))
+}
+
+/** For buttons and cards: just the bezel and a soft glare across the top (no smoke or vignette, so labels stay crisp). */
+fun Modifier.bezel(shape: Shape, strength: Float = 1f) = clip(shape).drawWithContent {
+    drawContent()
+    val w = size.width
+    val h = size.height
+    val gx = minOf(w, h) * 0.1f
+    val glare = androidx.compose.ui.graphics.Path().apply {
+        addOutline(shape.createOutline(Size(w - 2 * gx, h * 0.46f), layoutDirection, this@drawWithContent))
+        translate(Offset(gx, h * 0.05f))
+    }
+    drawPath(glare, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.12f * strength), Color.Transparent), startY = h * 0.05f, endY = h * 0.5f))
+    drawBezel(shape, strength)
+}
+
+/**
+ * A VCR display window's curved glass laid over whatever it covers (a cover, the bar): faintly smoked, darker toward
+ * the edges as the glass bends away, an arched glare across the top and a thin reflection along the bottom, faint
+ * scanlines. No outline.
+ */
+/**
+ * Textures drawn once and tiled: [grain] = fine film grain with brushed-metal streaks and granite sparkle (256 px,
+ * seamless top to bottom), for depth under the glass.
+ */
+object Textures {
+    val grain: androidx.compose.ui.graphics.ImageBitmap by lazy {
+        val n = 256
+        val rnd = java.util.Random(11)
+        val px = IntArray(n * n)
+        // Brushed streaks: each row a little lighter or darker, varying smoothly
+        val rows = FloatArray(n)
+        var drift = 0f
+        for (y in 0 until n) { drift = drift * 0.82f + (rnd.nextFloat() - 0.5f) * 0.18f; rows[y] = drift }
+        for (y in 0 until n) for (x in 0 until n) {
+            val noise = (rnd.nextFloat() + rnd.nextFloat() + rnd.nextFloat()) / 3f - 0.5f
+            val l = noise * 0.9f + rows[y]
+            val a = (kotlin.math.abs(l) * 2f * 46f).toInt().coerceIn(0, 60)
+            px[y * n + x] = if (rnd.nextFloat() < 0.004f) android.graphics.Color.argb(90, 255, 255, 255) // sparkle
+                else if (l > 0) android.graphics.Color.argb(a, 255, 255, 255) else android.graphics.Color.argb(a, 0, 0, 0)
+        }
+        android.graphics.Bitmap.createBitmap(px, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+
+    val grainBrush by lazy { androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(grain, androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)) }
+}
+
+/** [bezel]: the lit edge runs all the way round, like a phone's chamfered frame (the bar); otherwise only along the top. */
+fun Modifier.vcrGlass(shape: Shape, grain: Float = 0.35f, bezel: Boolean = false, glareMax: Dp = Dp.Infinity) = clip(shape).drawWithContent {
+    drawContent()
+    val w = size.width
+    val h = size.height
+    // Fine grain under the glass (a cover gets less than the bar)
+    if (grain > 0f) drawRect(Textures.grainBrush, alpha = grain)
+    drawRect(Color(0xFF0B0A10).copy(alpha = 0.10f))
+    // The bend: edges darker, top and bottom more than the sides
+    drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.34f), 0.22f to Color.Transparent, 0.78f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.42f)))
+    drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.26f), 0.12f to Color.Transparent, 0.88f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.26f)))
+    // The glare and the hard highlight follow the element's own outline (a pill gets a pill-shaped glare, a cover a
+    // rounded one): glare = the shape again, smaller, across the top half; highlight = the shape's top edge, inset.
+    fun outline(sz: Size, at: Offset) = androidx.compose.ui.graphics.Path().apply {
+        addOutline(shape.createOutline(sz, layoutDirection, this@drawWithContent))
+        translate(at)
+    }
+    val gx = minOf(w, h) * 0.12f
+    // (a tall panel keeps a shallow glare along its top, not a pale block over its contents)
+    val gh = minOf(h * 0.48f, if (glareMax == Dp.Infinity) Float.MAX_VALUE else glareMax.toPx())
+    drawPath(outline(Size(w - 2 * gx, gh), Offset(gx, h * 0.05f)),
+        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.17f), Color.White.copy(alpha = 0.01f)), startY = h * 0.05f, endY = h * 0.05f + gh * 1.1f))
+    val inset = 1.6.dp.toPx()
+    if (bezel) drawBezel(shape)
+    else clipRect(0f, 0f, w, h * 0.34f) {
+        drawPath(outline(Size(w - 2 * inset, h - 2 * inset), Offset(inset, inset)),
+            Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.12f), Color.Transparent)),
+            style = Stroke(1.2.dp.toPx()))
+    }
+    // Bottom reflection
+    drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.10f), Color.Transparent)), Offset(w * 0.15f, h - 3.dp.toPx()), Size(w * 0.7f, 1.dp.toPx()))
+    var y = 0f
+    val line = Color.Black.copy(alpha = 0.06f)
+    while (y < h) { drawRect(line, Offset(0f, y), Size(w, 1f)); y += 3f }
+}
+
 fun Modifier.iridescentRim(shape: Shape, width: Dp = 1.5.dp) = border(width, W.iridescent, shape)
 
 /**
@@ -243,7 +353,7 @@ fun Chip(label: String, selected: Boolean = false, count: Int? = null, onClick: 
     val shape = CircleShape
     Row(
         Modifier.clip(shape)
-            .then(if (selected) Modifier.background(Color.White, shape) else Modifier.glass(shape))
+            .then(if (selected) Modifier.background(Color.White, shape).bezel(shape, 0.7f) else Modifier.glass(shape))
             .clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -262,7 +372,7 @@ fun Pill(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector? =
     Row(
         Modifier.graphicsLayer { alpha = if (enabled) 1f else 0.4f }.clip(shape)
             .then(when (style) {
-                PillStyle.PRIMARY -> Modifier.background(Color.White, shape)
+                PillStyle.PRIMARY -> Modifier.background(Color.White, shape).bezel(shape, 0.7f)
                 PillStyle.SMART -> Modifier.smartGlass(shape)
                 PillStyle.GLASS -> Modifier.glass(shape)
             })
@@ -289,7 +399,7 @@ fun CandyButton(size: Dp, onClick: () -> Unit, content: @Composable BoxScope.() 
     Box(
         Modifier.size(size).background(Color(0xFF07060A), CircleShape).padding(2.dp).clip(CircleShape)
             .background(Brush.linearGradient(W.smartColors), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape)
+            .bezel(CircleShape, 0.9f)
             .drawWithContent {
                 drawContent()
                 drawOval(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.6f), Color.White.copy(alpha = 0.02f)), endY = size.toPx() * 0.5f),
@@ -438,6 +548,73 @@ fun EqDots(gains: List<Float>, on: Boolean, modifier: Modifier = Modifier, onBan
                 val w = colW * 0.5f
                 drawRoundRect(c, Offset(x - w / 2, row * step - 1.5.dp.toPx()), Size(w, 3.dp.toPx()), CornerRadius(1.dp.toPx()))
             }
+        }
+    }
+}
+
+// MARK: - The record button
+
+/**
+ * The WreckBox logo as a live record: the app icon's 32-pixel disc (lilac and peach label, dark grooves, rim). While
+ * [playing], the light's reflection travels round the grooves like a turning record; [buffering] pulses the label.
+ */
+@Composable
+fun PixelDisc(modifier: Modifier, playing: Boolean, buffering: Boolean = false) {
+    val spin = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(playing) {
+        while (playing) spin.animateTo(spin.value + 360f, androidx.compose.animation.core.tween(2400, easing = androidx.compose.animation.core.LinearEasing))
+    }
+    val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse").animateFloat(0.55f, 1f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(500), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
+    Canvas(modifier) {
+        val n = 32
+        val px = this.size.width / n
+        val glintAt = spin.value % 360f
+        fun inGlint(a: Double, center: Float) = ((a - center + 540) % 360 - 180).let { it > -16 && it < 16 }
+        for (gy in 0 until n) for (gx in 0 until n) {
+            val dx = gx - 15.5
+            val dy = gy - 15.5
+            val r = kotlin.math.sqrt(dx * dx + dy * dy)
+            val angle = Math.toDegrees(kotlin.math.atan2(dy, dx))
+            val color = when {
+                r < 1.6 -> Color(0xFF050506) // spindle hole
+                r < 3.6 -> W.lilac.copy(alpha = if (buffering) pulse else 1f)
+                r < 5.6 -> W.peach.copy(alpha = if (buffering) pulse else 1f)
+                r < 6.3 -> Color(0xFF050506)
+                r < 14.6 -> {
+                    // Two opposite reflections, where the light hits the grooves; they travel while it plays.
+                    val glint = inGlint(angle, -134f + glintAt) || inGlint(angle, 46f + glintAt)
+                    val band = ((r - 6.3) / 1.7).toInt() % 2 == 0
+                    Color(if (glint) (if (band) 0xFF4A4A56 else 0xFF5C5C6A) else (if (band) 0xFF15151A else 0xFF202027))
+                }
+                r < 15.6 -> Color(0xFF34343E)
+                else -> continue
+            }
+            drawRect(color, Offset(gx * px, gy * px), Size(px + 0.3f, px + 0.3f))
+        }
+    }
+}
+
+/**
+ * The play button as the WreckBox logo: the pixel record ([PixelDisc]) in a dark well, under the curved glass and the
+ * bezel, with a normal white play / pause icon over it.
+ */
+@Composable
+fun RecordButton(size: Dp, playing: Boolean, buffering: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier.size(size)
+            .shadow(10.dp, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
+            .background(Color(0xFF07060A), CircleShape)
+            .vcrGlass(CircleShape, grain = 0.12f, bezel = true)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .semantics { contentDescription = if (playing) "Pause" else "Play" },
+    ) {
+        PixelDisc(Modifier.fillMaxSize(), playing, buffering)
+        // The play / pause symbol: a normal (smooth) white icon over the pixel disc, with a soft dark shadow.
+        if (!buffering) {
+            val icon = if (playing) androidx.compose.material.icons.Icons.Filled.Pause else androidx.compose.material.icons.Icons.Filled.PlayArrow
+            Icon(icon, null, Modifier.align(Alignment.Center).offset(1.dp, 1.5.dp).size(size * 0.42f), tint = Color.Black.copy(alpha = 0.6f))
+            Icon(icon, null, Modifier.align(Alignment.Center).size(size * 0.42f), tint = Color.White)
         }
     }
 }

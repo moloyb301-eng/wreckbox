@@ -21,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Debug.init(this)
         enableEdgeToEdge()
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_MEDIA_AUDIO), 1)
         PlayerService.connect(this) { s -> player = s.player; intent?.let { test(it); widget(it) } }
@@ -89,6 +91,16 @@ class MainActivity : ComponentActivity() {
                 player?.let { App(it, page) { p -> page = p } } ?: Box(Modifier.fillMaxSize().background(W.bg))
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Island.appVisible.value = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Island.appVisible.value = false
     }
 
     override fun onResume() {
@@ -131,15 +143,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** The Search page's last query and results, so they survive switching tabs. */
-object SearchMemory {
-    val query = mutableStateOf("")
-    val results = mutableStateOf<List<Track>>(emptyList())
-    val searched = mutableStateOf("")
-    val failed = mutableStateOf<List<String>>(emptyList())
-    val filter = mutableStateOf<Source?>(null)
-}
-
 enum class Page(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Filled.Home), SEARCH("Search", Icons.Filled.Search),
     PLAYLISTS("Playlists", Icons.AutoMirrored.Filled.QueueMusic), NOW("Playing", Icons.Filled.GraphicEq),
@@ -157,16 +160,20 @@ fun App(player: HybridPlayer, page: Page, go: (Page) -> Unit) {
     val haze = remember { HazeState() }
     var barHeight by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current
-    BackHandler(page != Page.HOME || openPlaylist != null) {
-        if (openPlaylist != null) openPlaylist = null else go(Page.HOME)
+    BackHandler(page != Page.HOME || openPlaylist != null || Nav.stack.isNotEmpty()) {
+        when {
+            Nav.stack.isNotEmpty() -> Nav.back()
+            openPlaylist != null -> openPlaylist = null
+            else -> go(Page.HOME)
+        }
     }
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().hazeSource(haze)) {
             AmbientBackground(ui.current?.art)
             CompositionLocalProvider(LocalBarHeight provides barHeight) {
-                AnimatedContent(page to openPlaylist, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "page") { (pg, pl) ->
+                AnimatedContent(Triple(page, openPlaylist, Nav.stack.lastOrNull()), transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "page") { (pg, pl, detail) ->
                     Box(Modifier.fillMaxSize().statusBarsPadding()) {
-                        when (pg) {
+                        if (detail != null && pg != Page.NOW) DetailPage(player, detail) else when (pg) {
                             Page.HOME -> HomePage(player, { settings = true }) { openPlaylist = it; go(Page.PLAYLISTS) }
                             Page.SEARCH -> SearchPage(player)
                             Page.PLAYLISTS -> if (pl != null) PlaylistPage(player, pl) { openPlaylist = null } else PlaylistsPage { openPlaylist = it }
@@ -176,16 +183,16 @@ fun App(player: HybridPlayer, page: Page, go: (Page) -> Unit) {
                 }
             }
         }
-        // The glass bar: mini player + tabs, blurring what scrolls under it.
+        // Under the bar: the page fades into the background, so what scrolls behind doesn't clash with the casing.
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(barHeight + 36.dp)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, W.bg.copy(alpha = 0.82f), W.bg))))
+        // At the bottom: the floating bar (Bar.kt) — the pages and the player in one pill, in the widget's casing.
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { barHeight = with(density) { it.height.toDp() } }
-                .hazeEffect(haze, HazeStyle(backgroundColor = W.bg, tint = HazeTint(W.bg.copy(alpha = 0.55f)), blurRadius = 28.dp, noiseFactor = 0.05f))
-                .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent)), RoundedCornerShape(0.dp))
                 .navigationBarsPadding(),
         ) {
-            if (page != Page.NOW && ui.current != null) MiniPlayer(player, ui) { go(Page.NOW) }
-            NavBar(page) { p -> go(p); if (p != Page.PLAYLISTS) openPlaylist = null }
+            FloatingBar(player, ui, page, Nav.stack.isEmpty() || page == Page.NOW) { p -> go(p); Nav.clear(); if (p != Page.PLAYLISTS) openPlaylist = null }
         }
         // Messages clear themselves after a few seconds (OK clears them at once).
         LaunchedEffect(ui.message) { if (ui.message != null) { delay(3000); player.clearMessage() } }
@@ -202,24 +209,6 @@ fun App(player: HybridPlayer, page: Page, go: (Page) -> Unit) {
         }
     }
     if (settings) SettingsSheet { settings = false }
-}
-
-@Composable
-fun NavBar(page: Page, go: (Page) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-        Page.entries.forEach { p ->
-            val on = page == p
-            Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).clickable { go(p) }.padding(vertical = 6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(p.icon, p.label, tint = if (on) W.text else W.text3, modifier = Modifier.size(24.dp))
-                Text(p.label, style = W.ui(11.sp, if (on) FontWeight.Bold else FontWeight.Medium), color = if (on) W.text else W.text3)
-                // The selected tab's mark: a short iridescent bar
-                Box(Modifier.padding(top = 3.dp).size(if (on) 16.dp else 0.dp, 2.5.dp).background(W.smart, CircleShape))
-            }
-        }
-    }
 }
 
 // MARK: - Shared pieces
@@ -259,7 +248,7 @@ fun LazyListScope.glassList(tracks: List<Track>, key: String, row: @Composable (
 @UnstableApi
 @Composable
 fun TrackRow(player: HybridPlayer, t: Track, playing: Boolean = false, onPlay: () -> Unit, onRemove: (() -> Unit)? = null,
-             extra: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null) {
+             also: List<Source> = emptyList(), extra: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null) {
     // Swipe: in a list, right = add to queue, left = play next; in the queue (onRemove), either way = remove.
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val swipe = rememberSwipeToDismissBoxState(
@@ -279,7 +268,7 @@ fun TrackRow(player: HybridPlayer, t: Track, playing: Boolean = false, onPlay: (
     SwipeToDismissBox(swipe, backgroundContent = { SwipeBackground(swipe.dismissDirection, onRemove != null) }) {
         // While it moves, the row is solid so it slides over the action rather than through it.
         Box(if (swipe.dismissDirection != SwipeToDismissBoxValue.Settled) Modifier.background(Color(0xFF17151D)) else Modifier) {
-            TrackRowContent(player, t, playing, onPlay, extra)
+            TrackRowContent(player, t, playing, onPlay, also, extra)
         }
     }
 }
@@ -308,7 +297,8 @@ fun SwipeBackground(direction: SwipeToDismissBoxValue, remove: Boolean) {
 
 @UnstableApi
 @Composable
-private fun TrackRowContent(player: HybridPlayer, t: Track, playing: Boolean, onPlay: () -> Unit, extra: (@Composable ColumnScope.(close: () -> Unit) -> Unit)?) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun TrackRowContent(player: HybridPlayer, t: Track, playing: Boolean, onPlay: () -> Unit, also: List<Source>, extra: (@Composable ColumnScope.(close: () -> Unit) -> Unit)?) {
     val c = LocalContext.current
     val lib = Library.get(c)
     // Only what this row shows: whether it's liked, and (only for the playing row) whether music is playing — so a
@@ -321,9 +311,10 @@ private fun TrackRowContent(player: HybridPlayer, t: Track, playing: Boolean, on
     var pick by remember { mutableStateOf(false) }
     var quality by remember(t.key) { mutableStateOf(Quality.cached(t)) }
     if (t.source == Source.LOCAL && quality == null) LaunchedEffect(t.key) { quality = withContext(Dispatchers.IO) { Quality.of(c, t) } }
-    Row(Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(start = 10.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Tap plays; long-press opens the menu (as ⋮ does).
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = onPlay, onLongClick = { menu = true }).padding(start = 10.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Box {
-            Cover(t.art, Modifier.size(46.dp), RoundedCornerShape(W.Radius.art))
+            Cover(t.art, Modifier.size(46.dp), RoundedCornerShape(W.Radius.art), t.title)
             if (playing) Box(Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(W.Radius.art)), contentAlignment = Alignment.Center) {
                 DotSpectrum(live)
             }
@@ -332,6 +323,8 @@ private fun TrackRowContent(player: HybridPlayer, t: Track, playing: Boolean, on
             Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = W.ui(15.sp, FontWeight.SemiBold), color = if (playing) W.lilac else W.text)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SourceTag(t.source)
+                // The same song from the other sources (search merges them): dim tags after the one that plays.
+                also.forEach { a -> Text(" +${a.label.uppercase()}", color = a.tint.copy(alpha = 0.55f), style = W.dot(9.sp), letterSpacing = 1.sp) }
                 Text("  ${t.artist}${t.album?.let { " · $it" } ?: ""}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = W.ui(12.5.sp), color = W.text2)
             }
         }
@@ -369,7 +362,7 @@ fun AddToPlaylistDialog(t: Track, close: () -> Unit) {
                 data.playlists.forEach { p ->
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { lib.addToPlaylist(p.id, t); close() }.padding(vertical = 8.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Cover(p.tracks.firstOrNull()?.art, Modifier.size(36.dp), RoundedCornerShape(6.dp))
+                        PlaylistCover(p.tracks.firstOrNull()?.art, p.name, 36.dp, RoundedCornerShape(6.dp))
                         Text(p.name, Modifier.padding(start = 12.dp), style = W.ui(15.sp, FontWeight.SemiBold))
                     }
                 }
@@ -400,12 +393,11 @@ fun GlassField(value: String, onChange: (String) -> Unit, placeholder: String, m
 
 @UnstableApi
 @Composable
-fun MiniPlayer(player: HybridPlayer, ui: HybridPlayer.Ui, open: () -> Unit) {
+fun MiniPlayer(player: HybridPlayer, ui: HybridPlayer.Ui, modifier: Modifier = Modifier, open: () -> Unit) {
     val t = ui.current ?: return
-    val progress by produceState(0f, t.key) { while (true) { if (Screen.on.value) value = player.durationMs().let { d -> if (d > 0) player.positionMs().toFloat() / d else 0f }; delay(1000) } }
-    Column(Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp).glass(RoundedCornerShape(18.dp)).clickable(onClick = open)) {
+    Column(modifier.clickable(onClick = open)) {
         Row(Modifier.padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Cover(t.art, Modifier.size(40.dp), RoundedCornerShape(8.dp))
+            Cover(t.art, Modifier.size(40.dp), RoundedCornerShape(8.dp), t.title)
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = W.ui(14.sp, FontWeight.SemiBold))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -417,114 +409,13 @@ fun MiniPlayer(player: HybridPlayer, ui: HybridPlayer.Ui, open: () -> Unit) {
             IconButton({ player.toggle() }) { Icon(if (ui.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/pause", tint = W.text) }
             IconButton({ player.seekToNext() }) { Icon(Icons.Filled.SkipNext, "Next", tint = W.text) }
         }
-        // Progress: a hairline in the gradient
-        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(2.dp).background(W.hairline, CircleShape)) {
-            Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(W.smart, CircleShape))
-        }
-        Spacer(Modifier.height(8.dp))
+        // (How far into the song: the Now playing button's dots fill up — Bar.kt.)
+        Spacer(Modifier.height(2.dp))
     }
 }
 
 @Composable
 fun BottomSpace() = Spacer(Modifier.height(LocalBarHeight.current + 16.dp))
-
-// MARK: - Home
-
-@UnstableApi
-@Composable
-fun HomePage(player: HybridPlayer, openSettings: () -> Unit, openPlaylist: (String) -> Unit) {
-    val c = LocalContext.current
-    val lib = Library.get(c)
-    val data by lib.data.collectAsState()
-    val ui by player.ui.collectAsState()
-    var local by remember { mutableStateOf<List<Track>>(emptyList()) }
-    val updateVersion by Updates.available.collectAsState()
-    LaunchedEffect(Unit) { Updates.check(c) }
-    // Cookies may not be readable on the very first frame, so check again shortly.
-    var signedIn by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        repeat(3) { signedIn = LoginActivity.signedIn(Service.YOUTUBE) && LoginActivity.signedIn(Service.SPOTIFY); delay(700) }
-    }
-    // The phone's songs: from memory after the first read; folders re-indexed at most twice a day (or "Rescan").
-    var rescanTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(rescanTick) {
-        local = withContext(Dispatchers.IO) { runCatching { Local.cached(c) }.getOrDefault(emptyList()) }
-        if (rescanTick == 0 && !Local.scanDue(c)) return@LaunchedEffect
-        val scanned = kotlinx.coroutines.CompletableDeferred<Unit>()
-        Local.rescan(c) { scanned.complete(Unit) }
-        kotlinx.coroutines.withTimeoutOrNull(60_000) { scanned.await() }
-        local = withContext(Dispatchers.IO) { runCatching { Local.refresh(c) }.getOrDefault(emptyList()) }
-    }
-    LazyColumn(Modifier.fillMaxSize()) {
-        item {
-            Row(Modifier.fillMaxWidth().padding(20.dp, 14.dp, 14.dp, 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { Wordmark() }
-                RoundButton(Icons.Filled.Tune, "Accounts & settings", onClick = openSettings)
-            }
-        }
-        updateVersion?.let { v ->
-            item {
-                Row(Modifier.padding(16.dp, 12.dp, 16.dp, 0.dp).fillMaxWidth().smartGlass().clickable {
-                    c.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Updates.PAGE)))
-                }.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("WreckBox Player $v is out", style = W.ui(17.sp, FontWeight.Bold))
-                        Text("You have ${BuildConfig.VERSION_NAME}. Tap to download the update.", style = W.ui(13.sp), color = W.text2)
-                    }
-                    Icon(Icons.Filled.SystemUpdate, null, Modifier.size(22.dp), tint = W.text)
-                }
-            }
-        }
-        if (!signedIn) item {
-            Row(Modifier.padding(16.dp, 12.dp).fillMaxWidth().smartGlass().clickable(onClick = openSettings).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Bring your music in", style = W.ui(17.sp, FontWeight.Bold))
-                    Text("Sign in to YouTube Music and Spotify to play and search them here.", style = W.ui(13.sp), color = W.text2)
-                }
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp), tint = W.text)
-            }
-        }
-        // Pick up where you left off
-        ui.current?.let { t ->
-            item {
-                Row(Modifier.padding(16.dp, 12.dp, 16.dp, 0.dp).fillMaxWidth().glass().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Cover(t.art, Modifier.size(64.dp).iridescentRim(RoundedCornerShape(12.dp)), RoundedCornerShape(12.dp))
-                    Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-                        DotLabel(if (ui.playing) "Now playing" else "Paused", color = W.lilac, size = 10.sp)
-                        Text(t.title, style = W.ui(16.sp, FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(t.artist, style = W.ui(13.sp), color = W.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    CandyButton(48.dp, { player.toggle() }) {
-                        Icon(if (ui.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/pause", tint = Color(0xFF0A0A0C), modifier = Modifier.size(26.dp))
-                    }
-                }
-            }
-        }
-        if (data.likes.isNotEmpty()) {
-            item { Section("Liked songs · ${data.likes.size}") }
-            item { PlayShuffle({ player.playList(data.likes) }, { player.playList(data.likes, shuffled = true) }) }
-            glassList(data.likes.take(10), "like") { i, t -> TrackRow(player, t, ui.current?.key == t.key, { player.playList(data.likes, i) }) }
-        }
-        if (data.playlists.isNotEmpty()) {
-            item { Section("Your playlists") }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(data.playlists, key = { it.id }) { p -> PlaylistTile(p, 138.dp) { openPlaylist(p.id) } }
-                }
-            }
-        }
-        if (data.recent.isNotEmpty()) {
-            item { Section("Recently played", "Clear") { lib.clearRecent() } }
-            glassList(data.recent.take(12), "recent") { _, t -> TrackRow(player, t, ui.current?.key == t.key, { player.playList(listOf(t)) }) }
-        }
-        if (local.isNotEmpty()) {
-            item { Section("On this phone · ${local.size}", "Rescan") { rescanTick++ } }
-            item { PlayShuffle({ player.playList(local) }, { player.playList(local, shuffled = true) }) }
-            glassList(local.take(30), "local") { i, t -> TrackRow(player, t, ui.current?.key == t.key, { player.playList(local, i) }) }
-        }
-        item { BottomSpace() }
-    }
-}
 
 @Composable
 fun PlayShuffle(play: () -> Unit, shuffle: () -> Unit, enabled: Boolean = true) {
@@ -537,7 +428,7 @@ fun PlayShuffle(play: () -> Unit, shuffle: () -> Unit, enabled: Boolean = true) 
 @Composable
 fun PlaylistTile(p: Playlist, size: Dp, open: () -> Unit) {
     Column(Modifier.width(size).clickable(onClick = open)) {
-        Cover(p.tracks.firstOrNull()?.art, Modifier.size(size), RoundedCornerShape(W.Radius.tile))
+        PlaylistCover(p.tracks.firstOrNull()?.art, p.name, size)
         Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = W.ui(14.sp, FontWeight.SemiBold), modifier = Modifier.padding(top = 8.dp, start = 2.dp))
         Text(songs(p.tracks.size), style = W.ui(12.sp), color = W.text2, modifier = Modifier.padding(start = 2.dp))
     }
@@ -572,6 +463,8 @@ fun SettingsSheet(close: () -> Unit) {
                 }
                 DotLabel("WreckBox", Modifier.padding(top = 18.dp, bottom = 10.dp))
                 WreckBoxLink()
+                DotLabel("Listening history", Modifier.padding(top = 18.dp, bottom = 10.dp))
+                HistorySettings()
                 DotLabel("Playback", Modifier.padding(top = 18.dp, bottom = 10.dp))
                 val pm = c.getSystemService(PowerManager::class.java)
                 Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -581,6 +474,20 @@ fun SettingsSheet(close: () -> Unit) {
                     }
                     if (pm.isIgnoringBatteryOptimizations(c.packageName)) DotLabel("On", color = W.lilac)
                     else Pill("Allow") { c.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${c.packageName}"))) }
+                }
+                Spacer(Modifier.height(10.dp))
+                // The island round the camera (phones with a hole-punch camera)
+                val islandOn by Island.enabled.collectAsState()
+                Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Island round the camera", style = W.ui(15.sp, FontWeight.SemiBold))
+                        Text(if (Island.allowed(c)) "While music plays outside the app: the song on an LED screen beside the camera; tap it for the player, ✕ to put it away until you play again. It also goes after 55 s without music. The player's notification card is hidden while it shows."
+                            else "Turn on: Settings → Accessibility → Installed apps → WreckBox island. It only draws the island; it doesn't read your screen.",
+                            style = W.ui(12.sp), color = W.text2)
+                    }
+                    // It needs its accessibility service switched on (the only way to draw above the status bar).
+                    if (!Island.allowed(c)) Pill("Turn on") { c.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                    else Switch(islandOn, { Island.setEnabled(c, it) }, colors = SwitchDefaults.colors(checkedTrackColor = W.lilac, checkedThumbColor = Color.White))
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -603,6 +510,42 @@ fun SettingsSheet(close: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Settings → Listening history: what the phone knows (plays, songs, artists), bring in YouTube Music / Spotify history
+ * or a data export file, or clear it. It stays on this phone.
+ */
+@Composable
+fun HistorySettings() {
+    val c = LocalContext.current
+    val h = History.get(c)
+    val d by h.data.collectAsState()
+    val status by Import.status.collectAsState()
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    fun go(f: suspend () -> Unit) { if (!busy) scope.launch { busy = true; runCatching { f() }.onFailure { e -> if (Import.status.value?.endsWith("…") == true) Import.status.value = "Import failed: ${e.message}" }; busy = false } }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { go { Import.file(c, it) } } }
+    var confirmClear by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp)) {
+        Text("${d.songs.values.sumOf { it.plays }} plays · ${d.songs.size} songs · ${d.artists.count { it.value > 0 }} artists", style = W.ui(15.sp, FontWeight.SemiBold))
+        Text("Search and Home learn your taste from it. It stays on this phone.", style = W.ui(12.sp), color = W.text2)
+        status?.let { Text(it, Modifier.padding(top = 6.dp), style = W.ui(12.sp), color = W.lilac) }
+        if (busy) LinearProgressIndicator(Modifier.padding(top = 8.dp).fillMaxWidth().height(2.dp).clip(CircleShape), color = W.lilac, trackColor = W.hairline)
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (LoginActivity.signedIn(Service.YOUTUBE)) Pill("From YouTube Music", style = PillStyle.SMART, enabled = !busy) { go { Import.youtube(c); HomeFeed.refresh(c, force = true) } }
+            if (LoginActivity.signedIn(Service.SPOTIFY)) Pill("From Spotify", style = PillStyle.SMART, enabled = !busy) { go { Import.spotify(c); HomeFeed.refresh(c, force = true) } }
+            Pill("Import a file", Icons.Filled.FileOpen, enabled = !busy) { pick.launch(arrayOf("application/zip", "application/json", "application/octet-stream", "text/*")) }
+            Pill("Clear", enabled = !busy && d.songs.isNotEmpty()) { confirmClear = true }
+        }
+        Text("A file brings in everything you ever played: Spotify → Account privacy → Download your data → Extended streaming history; or Google Takeout → YouTube and YouTube Music → history as JSON. Pick the .zip it sends you.",
+            Modifier.padding(top = 10.dp), style = W.ui(11.5.sp), color = W.text3)
+    }
+    if (confirmClear) AlertDialog({ confirmClear = false }, containerColor = Color(0xF2141219),
+        title = { Text("Clear listening history?") }, text = { Text("Search and Home forget what you play. Imports can bring it back.") },
+        confirmButton = { TextButton({ h.clear(); confirmClear = false; Import.status.value = null }) { Text("Clear", color = W.peach) } },
+        dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel", color = W.text2) } })
 }
 
 /** Settings → WreckBox: link with a code, then playlists sync by themselves. */
@@ -647,63 +590,6 @@ fun WreckBoxLink() {
             }
         }
         s.error?.let { Text(it, Modifier.padding(top = 8.dp), style = W.ui(12.sp), color = W.peach) }
-    }
-}
-
-// MARK: - Search
-
-@UnstableApi
-@Composable
-fun SearchPage(player: HybridPlayer) {
-    val c = LocalContext.current
-    val ui by player.ui.collectAsState()
-    // Kept outside the page so switching tabs doesn't wipe the search.
-    var q by SearchMemory.query
-    var results by SearchMemory.results
-    var busy by remember { mutableStateOf(false) }
-    var searched by SearchMemory.searched
-    var filter by SearchMemory.filter
-    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    val focus = androidx.compose.ui.platform.LocalFocusManager.current
-    val scope = rememberCoroutineScope()
-    fun run() {
-        val query = q.trim()
-        if (query.isEmpty()) return
-        busy = true
-        searched = query
-        keyboard?.hide()
-        focus.clearFocus()
-        scope.launch {
-            val found = Search.all(c, query)
-            results = found.tracks
-            SearchMemory.failed.value = found.failed
-            busy = false
-            keyboard?.hide() // also after a hardware Enter, where the first hide can come too early
-        }
-    }
-    val shown = results.filter { filter == null || it.source == filter }
-    LazyColumn(Modifier.fillMaxSize()) {
-        item {
-            Text("Search", style = W.ui(30.sp, FontWeight.Bold), modifier = Modifier.padding(20.dp, 14.dp, 20.dp, 12.dp))
-            GlassField(q, { q = it }, "Song, artist or a line from the lyrics", Modifier.padding(horizontal = 16.dp), Icons.Filled.Search,
-                trailing = { if (q.isNotEmpty()) IconButton({ q = ""; results = emptyList(); searched = ""; SearchMemory.failed.value = emptyList() }) { Icon(Icons.Filled.Close, "Clear", tint = W.text3) } },
-                onDone = ::run)
-            if (busy) LinearProgressIndicator(Modifier.padding(horizontal = 32.dp, vertical = 8.dp).fillMaxWidth().height(2.dp).clip(CircleShape), color = W.lilac, trackColor = W.hairline)
-            if (results.isNotEmpty()) Row(Modifier.padding(16.dp, 12.dp, 16.dp, 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("All", filter == null, results.size) { filter = null }
-                Source.entries.forEach { s -> results.count { it.source == s }.takeIf { it > 0 }?.let { n -> Chip(s.label, filter == s, n) { filter = s } } }
-            }
-            if (!busy && searched.isNotEmpty() && SearchMemory.failed.value.isNotEmpty())
-                Text("Couldn't reach ${SearchMemory.failed.value.joinToString(" or ")} — check your connection or sign-in.", Modifier.padding(20.dp, 6.dp), color = W.text2, style = W.ui(12.sp))
-            if (!busy && searched.isNotEmpty() && results.isEmpty()) Text("Nothing found for “$searched”.", Modifier.padding(20.dp), color = W.text2, style = W.ui(14.sp))
-            if (searched.isEmpty()) Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                DotSpectrum(false, cols = 7, rows = 5, dot = 6.dp, gap = 3.dp)
-                Text("Phone, YouTube Music and Spotify — all at once", Modifier.padding(top = 16.dp), style = W.ui(13.sp), color = W.text3)
-            }
-            Spacer(Modifier.height(6.dp))
-        }
-        glassList(shown, "r") { _, t -> TrackRow(player, t, ui.current?.key == t.key, { player.playList(listOf(t)) }) }
-        item { BottomSpace() }
     }
 }
 
@@ -769,7 +655,7 @@ fun PlaylistPage(player: HybridPlayer, id: String, back: () -> Unit) {
                 RoundButton(Icons.Filled.Delete, "Delete") { delete = true }
             }
             Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Cover(p.tracks.firstOrNull()?.art, Modifier.size(190.dp).shadow(24.dp, RoundedCornerShape(W.Radius.card)).iridescentRim(RoundedCornerShape(W.Radius.card)), RoundedCornerShape(W.Radius.card))
+                Box(Modifier.shadow(24.dp, RoundedCornerShape(W.Radius.card))) { PlaylistCover(p.tracks.firstOrNull()?.art, p.name, 190.dp, RoundedCornerShape(W.Radius.card)) }
                 Text(p.name, style = W.ui(26.sp, FontWeight.Bold), modifier = Modifier.padding(top = 16.dp, start = 20.dp, end = 20.dp), maxLines = 2)
                 DotLabel(songs(p.tracks.size), Modifier.padding(top = 4.dp, bottom = 14.dp))
             }
@@ -839,7 +725,7 @@ fun NowPlayingPage(player: HybridPlayer, ui: HybridPlayer.Ui) {
             val shape = RoundedCornerShape(W.Radius.card)
             // Sideways the screen is short: a small cover keeps the controls in reach.
             Cover(t.art, (if (landscape) Modifier.padding(top = 12.dp).size(150.dp) else Modifier.padding(top = 20.dp).widthIn(max = 400.dp).fillMaxWidth(0.84f).aspectRatio(1f))
-                .shadow(32.dp, shape, ambientColor = W.lilac, spotColor = W.lilac).iridescentRim(shape), shape)
+                .shadow(32.dp, shape, ambientColor = W.lilac, spotColor = W.lilac).vcrGlass(shape, grain = 0.18f, bezel = true), shape)
             Column(Modifier.fillMaxWidth().padding(22.dp, 22.dp, 22.dp, 0.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -875,10 +761,7 @@ fun NowPlayingPage(player: HybridPlayer, ui: HybridPlayer.Ui) {
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     IconButton({ player.setShuffle(!ui.shuffle) }) { Icon(Icons.Filled.Shuffle, "Shuffle", tint = if (ui.shuffle) W.lilac else W.text3) }
                     IconButton({ player.seekToPrevious() }, Modifier.size(58.dp)) { Icon(Icons.Filled.SkipPrevious, "Previous", Modifier.size(38.dp), tint = W.text) }
-                    CandyButton(76.dp, { player.toggle() }) {
-                        if (ui.buffering) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp, color = Color(0xFF0A0A0C))
-                        else Icon(if (ui.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Play/pause", Modifier.size(40.dp), tint = Color(0xFF0A0A0C))
-                    }
+                    RecordButton(80.dp, ui.playing, ui.buffering) { player.toggle() }
                     IconButton({ player.seekToNext() }, Modifier.size(58.dp)) { Icon(Icons.Filled.SkipNext, "Next", Modifier.size(38.dp), tint = W.text) }
                     IconButton({ player.cycleRepeat() }) {
                         Icon(if (ui.repeat == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat, "Repeat",

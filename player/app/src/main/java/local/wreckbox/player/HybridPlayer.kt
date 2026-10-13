@@ -259,8 +259,28 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         if (src != Source.LOCAL && src != Source.YOUTUBE) Levels.clear()
     }
 
+    // What the listening history hears: the song started last and how far into it we got.
+    private var heardTrack: Track? = null
+    private var heardMs = 0L
+    private var heardDur = 0L
+
+    private fun logHeard() {
+        // The player still holds the old song here (the new one isn't loaded yet): read how far it got.
+        heardTrack?.let { t ->
+            val pos = if (t.source == Source.LOCAL) exo.currentPosition
+                else service(t)?.let { engines[it]?.last }?.takeIf { it.url.contains(t.id) || t.source == Source.SPOTIFY }?.let { (it.position * 1000).toLong() } ?: 0
+            heardMs = maxOf(heardMs, pos.coerceAtMost(heardDur.takeIf { it > 0 } ?: Long.MAX_VALUE))
+            History.get(context).record(t, heardMs, heardDur)
+        }
+        heardTrack = null
+    }
+
     private fun startCurrent() {
         val t = current() ?: return
+        logHeard()
+        heardTrack = t
+        heardMs = 0
+        heardDur = t.durationMs
         message = null
         buffering = true
         startedAt = System.currentTimeMillis()
@@ -436,6 +456,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     }
 
     private fun trackEnded() {
+        if (heardTrack?.key == current()?.key) heardMs = maxOf(heardMs, durationMs())
         engine()?.stop()
         when {
             repeat == Player.REPEAT_MODE_ONE -> startCurrent()
@@ -476,6 +497,10 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     private fun refresh() {
         // After a restart nothing was started yet: the label is still known from the library scan.
         if (quality == null) current()?.let { quality = Quality.cached(it) }
+        if (heardTrack != null && heardTrack?.key == current()?.key) {
+            heardMs = maxOf(heardMs, positionMs().coerceAtMost(durationMs().takeIf { it > 0 } ?: Long.MAX_VALUE))
+            durationMs().takeIf { it > 0 }?.let { heardDur = it }
+        }
         val u = Ui(queue, index, isPlayingNow(), buffering && playWhenReady, _shuffle, repeat, message, quality, radioKeys, radioFrom, radioJob != null)
         val widget = u.copy(message = null) != _ui.value.copy(message = null)
         _ui.value = u
@@ -594,6 +619,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     }
 
     override fun handleRelease(): ListenableFuture<*> {
+        logHeard()
         save()
         exo.release()
         engines.values.forEach { it.destroy() }

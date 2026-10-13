@@ -46,10 +46,18 @@ class PlayerService : MediaSessionService() {
             // over the audio link (they dropped audio). Real changes and seeks are still sent.
             .setPeriodicPositionUpdateEnabled(false)
             .build()
+        setMediaNotificationProvider(IslandAwareNotifications(this))
+        // The island switched on/off: swap the notification (silent and minimised while the island shows the song).
+        kotlinx.coroutines.MainScope().launch {
+            // (Calling onUpdateNotification directly does nothing in Media3 1.11; this is the public way to rebuild it.)
+            Island.active.collect { if (session != null) triggerNotificationUpdate() }
+        }
         // Our own screens use the player directly, so no controller ever "connects" — register the session ourselves
         // so Media3 posts the media notification (lock screen controls) and keeps the service in the foreground.
         addSession(session!!)
         instance = this
+        Debug.init(this)
+        Island.start(this, player)
         // Callbacks are one-shot (a button pressed while the service was down must not run again on a later restart).
         val waiting = listeners.toList()
         listeners.clear()
@@ -115,6 +123,7 @@ class PlayerService : MediaSessionService() {
         holdLocks(false)
         session?.run { player.release(); release() }
         session = null
+        Island.stop()
         instance = null
         super.onDestroy()
     }
@@ -134,4 +143,49 @@ class PlayerService : MediaSessionService() {
                 .onFailure { listeners -= f }.isSuccess
         }
     }
+}
+
+/**
+ * The notification Android requires while the player runs in the background. Normally Media3's media notification
+ * (the player card in the panel, lock screen). While the island is in use it's a silent, minimised one instead — no
+ * media card, no status-bar icon, no ongoing-media chip — so the island is the one place the song shows; headset and
+ * Bluetooth buttons still work through the media session.
+ */
+@UnstableApi
+private class IslandAwareNotifications(private val service: PlayerService) : androidx.media3.session.MediaNotification.Provider {
+    private val standard = androidx.media3.session.DefaultMediaNotificationProvider.Builder(service).build()
+
+    override fun createNotification(
+        session: MediaSession,
+        mediaButtonPreferences: com.google.common.collect.ImmutableList<androidx.media3.session.CommandButton>,
+        actionFactory: androidx.media3.session.MediaNotification.ActionFactory,
+        onNotificationChangedCallback: androidx.media3.session.MediaNotification.Provider.Callback,
+    ): androidx.media3.session.MediaNotification {
+        if (!Island.isActive()) return standard.createNotification(session, mediaButtonPreferences, actionFactory, onNotificationChangedCallback)
+        val nm = service.getSystemService(android.app.NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL) == null) nm.createNotificationChannel(
+            android.app.NotificationChannel(CHANNEL, "Playing (island on)", android.app.NotificationManager.IMPORTANCE_MIN).apply {
+                description = "While the island shows the song: a quiet, folded-away notice Android needs for background play"
+                setShowBadge(false)
+            })
+        val t = session.player.currentMediaItem?.mediaMetadata
+        val n = androidx.core.app.NotificationCompat.Builder(service, CHANNEL)
+            .setSmallIcon(androidx.media3.session.R.drawable.media3_notification_small_icon)
+            .setContentTitle(t?.title ?: "WreckBox Player")
+            .setContentText(t?.artist ?: "")
+            .setContentIntent(session.sessionActivity)
+            .setOngoing(true).setSilent(true).setShowWhen(false)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_MIN)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+        return androidx.media3.session.MediaNotification(androidx.media3.session.DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID, n)
+    }
+
+    override fun handleCustomCommand(session: MediaSession, action: String, extras: android.os.Bundle): Boolean =
+        standard.handleCustomCommand(session, action, extras)
+
+    override fun getNotificationChannelInfo() = standard.notificationChannelInfo
+
+    companion object { const val CHANNEL = "island" }
 }

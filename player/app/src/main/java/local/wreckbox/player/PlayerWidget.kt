@@ -290,7 +290,7 @@ class PlayerWidget : AppWidgetProvider() {
             img(v, widget, R.id.wb_dial, "dial") { shape("dial") { dial() } }
             // Spectrum: the music's real levels (still when there's nothing to measure)
             v.setImageViewBitmap(R.id.wb_sf0, spectrumFrame(Levels.bands.value))
-            img(v, widget, R.id.wb_clock, "${s.posMs / 1000}|${s.playing}|${s.title != null}") { clock(context, s.posMs, s.playing, s.title != null) }
+            img(v, widget, R.id.wb_clock, "${s.posMs / 1000}|${s.playing}|${s.title != null}") { clock(context, s.posMs, s.playing, s.title != null, w - Geo.G - Geo.LCD_RIGHT) }
             v.setProgressBar(R.id.wb_progress, 1000, if (s.durMs > 0) (s.posMs * 1000 / s.durMs).toInt().coerceIn(0, 1000) else 0, false)
             prop(v, widget, R.id.wb_play, "${s.playing}") { v.setImageViewResource(R.id.wb_play, if (s.playing) R.drawable.wb_icb_pause else R.drawable.wb_icb_play) }
 
@@ -385,7 +385,7 @@ class PlayerWidget : AppWidgetProvider() {
             val v = RemoteViews(context.packageName, R.layout.wb_widget_lock)
             v.setImageViewBitmap(R.id.wb_lock_bg, lockShell(w))
             v.setImageViewBitmap(R.id.wb_lcd, lcd(w - 2 * Geo.G, Geo.LCD_H, s))
-            v.setImageViewBitmap(R.id.wb_clock, clock(context, s.posMs, s.playing, s.title != null))
+            v.setImageViewBitmap(R.id.wb_clock, clock(context, s.posMs, s.playing, s.title != null, w - 2 * Geo.G))
             v.setProgressBar(R.id.wb_progress, 1000, if (s.durMs > 0) (s.posMs * 1000 / s.durMs).toInt().coerceIn(0, 1000) else 0, false)
             v.setImageViewResource(R.id.wb_play, if (s.playing) R.drawable.wb_icb_pause else R.drawable.wb_icb_play)
             for ((id, t) in listOf(R.id.wb_like to if (s.liked) "♥" else "♡", R.id.wb_shuffle to "Shuf")) {
@@ -428,7 +428,9 @@ class PlayerWidget : AppWidgetProvider() {
                     for (id in ids) {
                         val lock = manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY, -1) == AppWidgetProviderInfo_KEYGUARD
                         val v = RemoteViews(app.packageName, if (lock) R.layout.wb_widget_lock else R.layout.wb_widget)
-                        v.setImageViewBitmap(R.id.wb_clock, clock(app, ms, true, true))
+                        val opts = manager.getAppWidgetOptions(id)
+                        val wDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH).takeIf { it > 0 }?.toFloat() ?: if (lock) 300f else 340f
+                        v.setImageViewBitmap(R.id.wb_clock, clock(app, ms, true, true, if (lock) wDp - 2 * Geo.G else wDp - Geo.G - Geo.LCD_RIGHT))
                         if (!lock) v.setImageViewBitmap(R.id.wb_sf0, spectrumFrame(Levels.bands.value))
                         if (dur > 0) v.setProgressBar(R.id.wb_progress, 1000, (ms * 1000 / dur).toInt().coerceIn(0, 1000), false)
                         runCatching { manager.partiallyUpdateAppWidget(id, v) }
@@ -511,12 +513,16 @@ class PlayerWidget : AppWidgetProvider() {
             labelBitmap(context, s.uppercase(), paint { typeface = dotFace(); isFakeBoldText = true; textSize = sp * context.resources.displayMetrics.density; letterSpacing = 0.15f; this.color = color })
 
         /// The clock: peach Doto digits over faint "88:88" segments, with a soft glow, and the state mark before it.
-        private fun clock(context: Context, ms: Long, playing: Boolean, loaded: Boolean): Bitmap {
+        private fun clock(context: Context, ms: Long, playing: Boolean, loaded: Boolean, lcdW: Float = 170f): Bitmap {
             fonts(context)
             val d = context.resources.displayMetrics.density
             val b = Bitmap.createBitmap((116 * d).roundToInt(), (32 * d).roundToInt(), Bitmap.Config.ARGB_8888)
             val c = Canvas(b)
             val p = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 25f * d; letterSpacing = 0.04f }
+            // The clock must end before the spectrum (72 dp from the display's right edge); on a narrower widget it shrinks.
+            val fullDp = p.measureText("88:88") / d
+            val k = ((lcdW - 97f) / fullDp).coerceIn(0.5f, 1f)
+            if (k < 1f) p.textSize = 25f * d * k
             val y = b.height / 2f - (p.descent() + p.ascent()) / 2
             val x = 13 * d
             // State mark: ▶ playing, ❚❚ paused, ■ stopped
@@ -818,12 +824,28 @@ class PlayerWidget : AppWidgetProvider() {
             val scan = Paint().apply { color = Color.argb(26, 0, 0, 0) }
             y = 0f
             while (y < h) { c.drawRect(0f, y, w, y + 0.7f, scan); y += 2f }
-            c.drawText(s.track.takeIf { it.isNotEmpty() }?.let { "TRK $it" } ?: "TRK ---/---", 10f, 50f,
-                paint { typeface = dotFace(); isFakeBoldText = true; textSize = 8.5f; letterSpacing = 0.15f; color = Color.argb(150, 187, 150, 218) })
-            // Badges on the same row, right: source · format · shuffle · volume
+            // Badges on the same row, right: source · format · shuffle · volume. They are added by importance while they
+            // fit beside the track counter (a narrow widget used to pile them on top of each other); the counter
+            // itself gives way last, on a very narrow one.
+            val trkPaint = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 8.5f; letterSpacing = 0.15f; color = Color.argb(150, 187, 150, 218) }
+            val trk = s.track.takeIf { it.isNotEmpty() }?.let { "TRK $it" } ?: "TRK ---/---"
             val chip = paint { typeface = dotFace(); isFakeBoldText = true; textSize = 7.5f; letterSpacing = 0.1f; color = LILAC }
+            fun chipW(t: String) = chip.measureText(t) + 10f + 4f
+            val source = when (s.source) { Source.LOCAL -> "PHONE"; Source.YOUTUBE -> "YTM"; Source.SPOTIFY -> "SPOT"; null -> "" }
+            val trkW = trkPaint.measureText(trk)
+            val showTrk = w - 20f >= trkW + 60f
+            val room = w - 20f - (if (showTrk) trkW + 8f else 0f)
+            val format = s.format.takeIf { it.isNotEmpty() }?.let { f -> if (chipW(f) + chipW(source) <= room) f else f.substringBefore(' ') } ?: ""
+            val chosen = mutableListOf<String>()
+            var used = 0f
+            for (t in listOf(source, format, "VOL ${s.volume}", if (s.shuffle) "SHUF" else "").filter { it.isNotEmpty() }) {
+                if (used + chipW(t) <= room) { chosen += t; used += chipW(t) }
+            }
+            if (showTrk) c.drawText(trk, 10f, 50f, trkPaint)
             var bx = w - 10f
-            for (t in listOf("VOL ${s.volume}", if (s.shuffle) "SHUF" else "", s.format, when (s.source) { Source.LOCAL -> "PHONE"; Source.YOUTUBE -> "YTM"; Source.SPOTIFY -> "SPOT"; null -> "" }).filter { it.isNotEmpty() }) {
+            // drawn right to left: volume, shuffle, format, source
+            val drawOrder = chosen.filter { it.startsWith("VOL") } + chosen.filter { it == "SHUF" } + chosen.filter { it == format } + chosen.filter { it == source }
+            for (t in drawOrder.distinct()) {
                 val tw = chip.measureText(t) + 10f
                 bx -= tw
                 c.drawRoundRect(RectF(bx, 42f, bx + tw, 53f), 3f, 3f, paint { style = Paint.Style.STROKE; strokeWidth = 0.8f; color = Color.argb(140, 187, 150, 218) })

@@ -3,68 +3,254 @@ package local.wreckbox.player
 import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.Normalizer
+import kotlin.math.ln
+
+/** A song in the results: the copy that plays, the same song from the other sources, whether it's a video upload. */
+data class Hit(val track: Track, val alts: List<Track> = emptyList(), val video: Boolean = false)
 
 /**
- * One search across the phone, YouTube Music and Spotify, merged into the nearest results.
- *  - YouTube Music: its own web API (the one music.youtube.com uses — no key). It also matches lyrics, so a line from
- *    a song finds it.
- *  - Spotify: the signed-in web player's search page, read by the hidden search page (SpotifySearch in WebEngine).
- *  - Phone: the music Android knows about (MediaStore).
+ * One search across the phone, YouTube Music and Spotify, with our own ranking.
+ *
+ *  - Candidates: the on-phone index (your files, likes, playlists, history — instant, offline), YouTube Music (its own
+ *    web API, no key; also matches lyrics; gives the top result, artists, albums, playlists and its spelling fix), and
+ *    Spotify (the signed-in web player's search page, read by the hidden SpotifySearch page).
+ *  - Understanding: MusicBrainz says which artist the words mean, spelled right, with their other names; a fixed
+ *    spelling is searched too.
+ *  - Results arrive as each source answers ([stream]); the same song from several sources is one row that plays the
+ *    best copy (phone file first).
+ *  - Ranking ([score]): words matched (typo- and spelling-tolerant), the artist matching, the original over covers /
+ *    live / remixes / lyric videos unless asked, official songs over video uploads, and you — songs and artists you
+ *    play and like, and which result you picked last time you searched the same thing.
  */
 object Search {
-    /** The merged results, plus which services couldn't be reached (offline, signed out, timed out) so the page can say so. */
-    class Found(val tracks: List<Track>, val failed: List<String>)
+    class Results(
+        val query: String,
+        val top: Item? = null,
+        val hits: List<Hit> = emptyList(),
+        val artists: List<Item.Artist> = emptyList(),
+        val albums: List<Item.Album> = emptyList(),
+        val playlists: List<Item.Playlist> = emptyList(),
+        /** A spelling fix that was searched as well ("Showing results for …"). */
+        val corrected: String? = null,
+        /** Services that couldn't be reached (offline, signed out, timed out). */
+        val failed: List<String> = emptyList(),
+        val done: Boolean = false,
+    )
 
-    suspend fun all(c: Context, q: String): Found = coroutineScope {
-        val failed = java.util.Collections.synchronizedList(mutableListOf<String>())
-        val yt = async(Dispatchers.IO) { runCatching { youtube(q) }.getOrElse { failed += "YouTube Music"; emptyList() } }
-        val sp = async { withTimeoutOrNull(15_000) { runCatching { SpotifySearch.get(c).search(q) }.getOrNull() } ?: run { failed += "Spotify"; emptyList() } }
-        val local = async(Dispatchers.IO) { runCatching { Local.search(c, q) }.getOrDefault(emptyList()) }
-        Found(rank(q, local.await() + yt.await() + sp.await()), failed.toList())
+    /** The results so far, again each time a source answers; the last one has done = true. */
+    fun stream(c: Context, q: String): Flow<Results> = channelFlow {
+        val started = System.currentTimeMillis()
+        val lock = Mutex()
+        val tracks = mutableListOf<Pair<Track, Boolean>>() // (track, is a video upload)
+        var top: Item? = null
+        val artists = mutableListOf<Item.Artist>()
+        val albums = mutableListOf<Item.Album>()
+        val playlists = mutableListOf<Item.Playlist>()
+        var corrected: String? = null
+        var mb: MusicBrainz.Artist? = null
+        val failed = mutableListOf<String>()
+        var pending = 1 // until every source has been started
+        val times = mutableListOf<String>()
+        // Scores are worked out once per song; a new scoring (and a fresh memo) only when the meaning changes
+        // (a spelling fix, MusicBrainz's artist).
+        var scoring = Scoring(c, q, null)
+
+        suspend fun publish() {
+            if (scoring.q != (corrected ?: q) || scoring.mb != mb) scoring = Scoring(c, corrected ?: q, mb)
+            val hits = withContext(Dispatchers.Default) { rank(scoring, tracks) }
+            send(Results(q, top, hits, artists.distinctBy { it.id }, albums.distinctBy { it.id }, playlists.distinctBy { it.id }, corrected, failed.toList(), pending == 0))
+        }
+
+        suspend fun add(f: suspend () -> Unit) { lock.withLock { f(); publish() } }
+
+        fun source(name: String, report: Boolean, work: suspend () -> Unit) {
+            pending++
+            launch {
+                val ok = runCatching { work() }.isSuccess
+                lock.withLock {
+                    pending--
+                    times += "$name ${System.currentTimeMillis() - started}ms${if (ok) "" else " (failed)"}"
+                    if (!ok && report) failed += name
+                    publish()
+                }
+            }
+        }
+
+        // The network first (so it's under way while the phone searches itself), YouTube before anything else. Both
+        // YouTube searches are shared with search-while-typing: if typing already started them, they're reused.
+        source("YouTube Music", true) {
+            val r = YtCache.mixed(q).await()
+            add {
+                top = r.top
+                tracks += r.songs.map { it.track to it.video }
+                artists += r.artists; albums += r.albums; playlists += r.playlists
+                if (r.corrected != null && Search.norm(r.corrected) != Search.norm(q)) corrected = r.corrected
+            }
+        }
+        // YouTube Music, songs only: more of them than the mixed list has.
+        source("YouTube songs", false) {
+            val songs = YtCache.songs(q).await()
+            add { tracks += songs.map { it to false } }
+        }
+        if (LoginActivity.signedIn(Service.SPOTIFY)) source("Spotify", true) {
+            // The hidden page is a WebView: main thread.
+            val found = withContext(Dispatchers.Main) { withTimeoutOrNull(15_000) { SpotifySearch.get(c).search(q) } } ?: error("timed out")
+            add { tracks += found.map { it to false } }
+        }
+        // MusicBrainz: the artist meant, with their other names; a misspelt artist is searched again spelled right.
+        source("MusicBrainz", false) {
+            val a = MusicBrainz.artist(c, q) ?: return@source
+            lock.withLock { mb = a }
+            val nq = Search.norm(q)
+            if (a.names.none { it == nq || nq.contains(it) } && corrected == null) {
+                val fixed = a.name
+                lock.withLock { corrected = fixed; publish() }
+                val more = runCatching { YtCache.mixed(fixed).await() }.getOrNull()
+                if (more != null) add {
+                    if (top == null) top = more.top
+                    tracks += more.songs.map { it.track to it.video }
+                    artists += more.artists; albums += more.albums
+                }
+            } else lock.withLock { publish() }
+        }
+        // Your own music: on the phone, instant.
+        val mine = withContext(Dispatchers.Default) { SearchIndex.search(c, q) }
+        lock.withLock {
+            tracks.addAll(0, mine.map { it to false })
+            times += "phone ${System.currentTimeMillis() - started}ms"
+            pending--
+            publish()
+        }
+        // Wait for the rest, then log how long each took (test builds).
+        while (true) { val p = lock.withLock { pending }; if (p == 0) break; kotlinx.coroutines.delay(50) }
+        Debug.log("search \"$q\": ${times.joinToString(", ")}")
     }
 
-    /** Words that mark something other than the original song — skipped unless the search asks for them. */
-    private val noise = setOf("cover", "karaoke", "instrumental", "8 bit", "dance", "choreography", "tutorial", "reaction",
-        "slowed", "reverb", "sped up", "nightcore", "originally performed", "tribute", "lesson", "piano version", "status")
-
     /**
-     * Nearest first: every typed word should be in the title or artist; the artist field matching counts extra
-     * (so "liggi ritviz" puts Ritviz's Liggi above covers titled "Liggi - Ritviz"); covers, karaoke, dance videos
-     * and the like drop unless asked for; titles with lots of extra words drop a little. Ties keep the services' order.
+     * YouTube Music searches, shared between search-while-typing and the full search, kept 10 minutes: typing starts
+     * them, Enter reuses them (often already answered). A failed one is forgotten so the next try asks again.
      */
-    fun rank(q: String, list: List<Track>): List<Track> {
-        val nq = norm(q)
-        val words = nq.split(' ').filter { it.isNotEmpty() }
-        fun score(t: Track): Double {
-            val title = norm(t.title)
-            val artist = norm(t.artist)
-            val all = "$title $artist ${norm(t.album ?: "")}"
-            val tw = title.split(' ').filter { it.isNotEmpty() }
-            var s = words.count { all.contains(it) }.toDouble() / words.size.coerceAtLeast(1)
-            if (words.any { it.length > 2 && artist.contains(it) }) s += 0.6
-            if (title == nq || words.all { title.contains(it) } && tw.size <= words.size + 1) s += 0.5
-            s -= 0.4 * tw.count { w -> words.none { w.contains(it) } }.toDouble() / tw.size.coerceAtLeast(1)
-            if (noise.any { all.contains(it) && !nq.contains(it) }) s -= 1.0
-            if (t.source == Source.LOCAL) s += 0.2
-            return s
+    object YtCache {
+        private class Entry<T>(val at: Long, val job: Deferred<T>)
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val mixed = object : LinkedHashMap<String, Entry<YouTubeMusic.Results>>(32, 0.75f, true) {
+            override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Entry<YouTubeMusic.Results>>?) = size > 40
         }
-        return list.withIndex().sortedWith(compareByDescending<IndexedValue<Track>> { score(it.value) }.thenBy { it.index }).map { it.value }
+        private val songs = object : LinkedHashMap<String, Entry<List<Track>>>(32, 0.75f, true) {
+            override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Entry<List<Track>>>?) = size > 40
+        }
+
+        @Synchronized fun mixed(q: String): Deferred<YouTubeMusic.Results> = get(mixed, q) { YouTubeMusic.search(q) }
+        @Synchronized fun songs(q: String): Deferred<List<Track>> = get(songs, q) { youtube(q) }
+
+        private fun <T> get(map: LinkedHashMap<String, Entry<T>>, q: String, f: suspend () -> T): Deferred<T> {
+            val k = norm(q)
+            map[k]?.let { e ->
+                val stale = System.currentTimeMillis() - e.at > 10 * 60_000L
+                val broken = e.job.isCompleted && e.job.getCompletionExceptionOrNull() != null
+                if (!stale && !broken) return e.job
+            }
+            return scope.async { f() }.also { map[k] = Entry(System.currentTimeMillis(), it) }
+        }
+    }
+
+    /** Words that mark something other than the original song — ranked down unless the search asks for them. */
+    private val noise = listOf("cover", "karaoke", "instrumental", "8 bit", "dance", "choreography", "tutorial", "reaction",
+        "slowed", "reverb", "sped up", "nightcore", "originally performed", "tribute", "lesson", "piano version", "status",
+        "live", "remix", "mashup", "lofi", "lo fi", "8d", "lyrics", "lyrical", "bass boosted", "extended", "unplugged", "acoustic", "whatsapp")
+        .map { it to Regex("\\b$it\\b") }
+
+    /** Merges the same song from several sources into one hit and puts the nearest first. */
+    private fun rank(ctx: Scoring, list: List<Pair<Track, Boolean>>): List<Hit> {
+        val groups = LinkedHashMap<String, MutableList<Pair<Track, Boolean>>>()
+        list.forEach { (t, v) -> groups.getOrPut(Radio.name(t)) { mutableListOf() }.let { g -> if (g.none { it.first.key == t.key }) g += t to v } }
+        return groups.values.map { g ->
+            // The copy that plays: phone file, then the official YouTube Music song, then Spotify, then a video upload.
+            val sorted = g.sortedBy { (t, v) -> when { t.source == Source.LOCAL -> 0; t.source == Source.YOUTUBE && !v -> 1; t.source == Source.SPOTIFY -> 2; else -> 3 } }
+            val (main, video) = sorted.first()
+            val best = g.maxOf { (t, v) -> ctx.memo.getOrPut("${t.key}|$v") { score(ctx, t, v) } }
+            Hit(main.copy(art = main.art ?: g.firstNotNullOfOrNull { it.first.art }, album = main.album ?: g.firstNotNullOfOrNull { it.first.album }),
+                sorted.drop(1).map { it.first }, video) to best
+        }.withIndex().sortedWith(compareByDescending<IndexedValue<Pair<Hit, Double>>> { it.value.second }.thenBy { it.index }).map { it.value.first }
+    }
+
+    /** The songs for a query, merged and ranked (search-while-typing's preview). */
+    fun rank(c: Context, q: String, list: List<Pair<Track, Boolean>>): List<Hit> = rank(Scoring(c, q, null), list)
+
+    /** For radio: plain tracks, nearest first (no personal ranking, no merging). */
+    fun rank(q: String, list: List<Track>): List<Track> {
+        val ctx = Scoring(null, q, null)
+        return list.withIndex().sortedWith(compareByDescending<IndexedValue<Track>> { score(ctx, it.value, false) }.thenBy { it.index }).map { it.value }
+    }
+
+    private class Scoring(c: Context?, val q: String, val mb: MusicBrainz.Artist?) {
+        val memo = HashMap<String, Double>()
+        val nq = norm(Fuzzy.devanagari(q))
+        val words = nq.split(' ').filter { it.isNotEmpty() }
+        val history = c?.let { History.get(it) }
+        val liked = c?.let { Library.get(it).data.value.likes.map { t -> t.key }.toSet() } ?: emptySet()
+        val clicks = c?.let { Clicks.forQuery(it, q) } ?: emptyMap()
+        /** The typed words that are the artist's name (or one of their other names). */
+        val artistWords = mb?.names?.firstOrNull { n -> nq.contains(n) }?.split(' ')?.toSet() ?: emptySet()
+    }
+
+    private fun score(x: Scoring, t: Track, video: Boolean): Double {
+        val title = norm(Fuzzy.devanagari(t.title))
+        val artist = norm(Fuzzy.devanagari(t.artist))
+        val tw = title.split(' ').filter { it.isNotEmpty() }
+        val aw = artist.split(' ').filter { it.isNotEmpty() }
+        val alw = norm(t.album ?: "").split(' ').filter { it.isNotEmpty() }
+        var matched = 0.0
+        var artistHit = false
+        x.words.forEachIndexed { i, w ->
+            val last = i == x.words.lastIndex
+            val inTitle = tw.maxOfOrNull { Fuzzy.word(w, it, last) } ?: 0.0
+            var inArtist = aw.maxOfOrNull { Fuzzy.word(w, it, last) } ?: 0.0
+            // A word of the artist's other name (MusicBrainz) counts as the artist when the track's artist is them.
+            if (inArtist == 0.0 && w in x.artistWords && x.mb != null && x.mb.names.any { n -> artist.contains(n) }) inArtist = 0.9
+            val inAlbum = (alw.maxOfOrNull { Fuzzy.word(w, it, last) } ?: 0.0) * 0.8
+            if (w.length > 2 && inArtist >= 0.7 && inArtist >= inTitle) artistHit = true
+            matched += maxOf(inTitle, inArtist, inAlbum)
+        }
+        var s = matched / x.words.size.coerceAtLeast(1)
+        if (artistHit) s += 0.6
+        if (x.mb != null && x.mb.names.any { n -> artist.contains(n) }) s += 0.3
+        if (title == x.nq || x.words.all { w -> tw.any { Fuzzy.word(w, it, false) > 0 } } && tw.size <= x.words.size + 1) s += 0.5
+        s -= 0.4 * tw.count { w -> x.words.none { w.contains(it) } }.toDouble() / tw.size.coerceAtLeast(1)
+        val all = "$title $artist"
+        if (noise.any { (n, re) -> !x.nq.contains(n) && re.containsMatchIn(all) }) s -= 1.0
+        if (video && !t.artist.endsWith("VEVO") && !t.artist.endsWith(" - Topic")) s -= 0.3
+        if (t.source == Source.LOCAL) s += 0.2
+        // You: liked, played (and not skipped), your artists, and what you picked for this search before.
+        if (t.key in x.liked) s += 0.4
+        x.history?.let { h ->
+            h.stat(t)?.let { st -> s += (st.score * 0.1).coerceIn(-0.4, 0.5) }
+            s += (ln(1 + h.artistScore(t.artist).coerceAtLeast(0.0)) * 0.15).coerceAtMost(0.45)
+        }
+        x.clicks[Radio.name(t)]?.let { s += 0.8 * it.coerceAtMost(3) }
+        return s
     }
 
     fun norm(s: String) = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}"), "").replace(Regex("[^\\p{L}\\p{N} ]"), " ").replace(Regex("\\s+"), " ").trim()
 
-    // MARK: YouTube Music
+    // MARK: YouTube Music songs (also used by radio)
 
     private const val SONGS = "EgWKAQIIAWoMEA4QChADEAQQCRAF"
     private const val VIDEOS = "EgWKAQIQAWoMEA4QChADEAQQCRAF"
@@ -75,64 +261,48 @@ object Search {
         (songs.await() + videos.await()).distinctBy { it.id }
     }
 
-    private suspend fun ytQuery(q: String, params: String): List<Track> = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("context", JSONObject().put("client", JSONObject().put("clientName", "WEB_REMIX").put("clientVersion", "1.20251001.01.00").put("hl", "en")))
-            .put("query", q).put("params", params)
-        val c = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection
-        c.requestMethod = "POST"
-        c.doOutput = true
-        c.connectTimeout = 10_000
-        c.readTimeout = 15_000
-        c.setRequestProperty("Content-Type", "application/json")
-        c.setRequestProperty("Origin", "https://music.youtube.com")
-        c.setRequestProperty("User-Agent", WebEngine.userAgent())
-        c.outputStream.use { it.write(body.toString().toByteArray()) }
-        val text = c.inputStream.bufferedReader().use { it.readText() }
+    private suspend fun ytQuery(q: String, params: String): List<Track> {
+        val j = YouTubeMusic.call("search", JSONObject().put("query", q).put("params", params))
         val out = mutableListOf<Track>()
-        walk(JSONObject(text)) { r -> ytItem(r)?.let(out::add) }
-        out
+        YouTubeMusic.walk(j, "musicResponsiveListItemRenderer") { r -> (YouTubeMusic.listItem(r) as? Item.Song)?.let { out += it.track } }
+        return out
+    }
+}
+
+/** Which result you played after searching something: picked again, it ranks first next time. */
+object Clicks {
+    private fun prefs(c: Context) = c.getSharedPreferences("search", Context.MODE_PRIVATE)
+
+    fun forQuery(c: Context, q: String): Map<String, Int> {
+        val o = runCatching { JSONObject(prefs(c).getString("clicks", "{}")!!) }.getOrNull()?.optJSONObject(Search.norm(q)) ?: return emptyMap()
+        return o.keys().asSequence().associateWith { o.optInt(it) }
     }
 
-    /** Every musicResponsiveListItemRenderer anywhere in the response. */
-    private fun walk(v: Any?, f: (JSONObject) -> Unit) {
-        when (v) {
-            is JSONObject -> {
-                v.optJSONObject("musicResponsiveListItemRenderer")?.let { f(it); return }
-                v.keys().forEach { walk(v.opt(it), f) }
-            }
-            is JSONArray -> for (i in 0 until v.length()) walk(v.opt(i), f)
-        }
+    fun picked(c: Context, q: String, t: Track) {
+        if (q.isBlank()) return
+        val all = runCatching { JSONObject(prefs(c).getString("clicks", "{}")!!) }.getOrDefault(JSONObject())
+        val k = Search.norm(q)
+        val o = all.optJSONObject(k) ?: JSONObject()
+        val n = Radio.name(t)
+        o.put(n, o.optInt(n) + 1)
+        all.put(k, o)
+        // Keep the newest 300 searches.
+        if (all.length() > 300) all.keys().asSequence().toList().take(all.length() - 300).forEach { all.remove(it) }
+        prefs(c).edit().putString("clicks", all.toString()).apply()
     }
+}
 
-    private fun ytItem(r: JSONObject): Track? {
-        val cols = r.optJSONArray("flexColumns") ?: return null
-        fun runs(i: Int) = cols.optJSONObject(i)?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")?.optJSONObject("text")?.optJSONArray("runs")
-        val title = runs(0)?.optJSONObject(0)?.optString("text") ?: return null
-        val id = r.optJSONObject("playlistItemData")?.optString("videoId")?.takeIf { it.isNotEmpty() }
-            ?: runs(0)?.optJSONObject(0)?.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")?.optString("videoId")?.takeIf { it.isNotEmpty() }
-            ?: return null
-        val artists = mutableListOf<String>()
-        var album: String? = null
-        var duration = 0L
-        val meta = runs(1)
-        for (i in 0 until (meta?.length() ?: 0)) {
-            val run = meta!!.getJSONObject(i)
-            val text = run.optString("text")
-            val page = run.optJSONObject("navigationEndpoint")?.optJSONObject("browseEndpoint")
-                ?.optJSONObject("browseEndpointContextSupportedConfigs")?.optJSONObject("browseEndpointContextMusicConfig")?.optString("pageType")
-            when {
-                page == "MUSIC_PAGE_TYPE_ARTIST" || page == "MUSIC_PAGE_TYPE_USER_CHANNEL" -> artists += text
-                page == "MUSIC_PAGE_TYPE_ALBUM" -> album = text
-                Regex("^\\d+:\\d{2}(:\\d{2})?$").matches(text) -> duration = text.split(':').fold(0L) { a, p -> a * 60 + p.toLong() } * 1000
-            }
-        }
-        if (artists.isEmpty()) meta?.optJSONObject(0)?.optString("text")?.takeIf { it !in setOf("Song", "Video") }?.let { artists += it }
-        val thumbs = r.optJSONObject("thumbnail")?.optJSONObject("musicThumbnailRenderer")?.optJSONObject("thumbnail")?.optJSONArray("thumbnails")
-        val art = thumbs?.optJSONObject(thumbs.length() - 1)?.optString("url")
-            ?.replace(Regex("=w\\d+-h\\d+"), "=w544-h544")
-        return Track(Source.YOUTUBE, id, title, artists.joinToString(", "), album, duration, art)
-    }
+/** The searches you made, newest first (the empty Search page lists them). */
+object RecentSearches {
+    private fun prefs(c: Context) = c.getSharedPreferences("search", Context.MODE_PRIVATE)
+
+    fun all(c: Context): List<String> = runCatching { JSONArray(prefs(c).getString("recent", "[]")!!) }.getOrNull()
+        ?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+
+    fun add(c: Context, q: String) = save(c, (listOf(q.trim()) + all(c).filter { !it.equals(q.trim(), ignoreCase = true) }).take(20))
+    fun remove(c: Context, q: String) = save(c, all(c).filter { it != q })
+    fun clear(c: Context) = save(c, emptyList())
+    private fun save(c: Context, l: List<String>) = prefs(c).edit().putString("recent", JSONArray(l).toString()).apply()
 }
 
 /** Music files Android has indexed on this phone. */

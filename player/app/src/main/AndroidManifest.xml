@@ -11,6 +11,13 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Voice search (Search page): the phone's speech recogniser -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:label="WreckBox Player"
         android:icon="@mipmap/ic_launcher"
@@ -41,6 +48,18 @@
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
+        </service>
+
+        <!-- The island round the camera (Island.kt): an accessibility service only so it can draw above the status bar -->
+        <service
+            android:name=".IslandService"
+            android:exported="true"
+            android:label="@string/island_a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/island_accessibility" />
         </service>
 
         <!-- Home-screen and lock-screen player widget (PlayerWidget.kt) -->
