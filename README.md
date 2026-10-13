@@ -26,7 +26,7 @@ docs/      Friend guide and release guide
 .github/   CI: tests, Windows / Mac / Android builds, releases to the public releases repo
 ```
 
-See [docs/RELEASING.md](docs/RELEASING.md) to publish an update and [docs/FRIENDS.md](docs/FRIENDS.md) for the user guide.
+See [docs/HOW-WE-WORK.md](docs/HOW-WE-WORK.md) for branches, issues and versions, [docs/RELEASING.md](docs/RELEASING.md) to publish an update and [docs/FRIENDS.md](docs/FRIENDS.md) for the user guide.
 
 ## Development
 
@@ -40,3 +40,7 @@ WRECKBOX_CORE_LIB=../core/target/release/libwreckbox_core.dylib \
 WRECKBOX_TEST_LIBRARY="$HOME/Music/DJ Library" flutter test   # tests run on a COPY of the library
 ../scripts/build-android-core.sh && flutter build apk --release
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
