@@ -3,7 +3,7 @@ name = "wreckbox_core"
 version = "0.1.0"
 edition = "2021"
 description = "WreckBox engine: audio decoding, BPM / key / energy analysis and tag writing — shared by every platform"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [lib]
