@@ -56,12 +56,6 @@ enum DevCommands {
             default: break
             }
         case "jump": if let i = arg("i").flatMap(Int.init) { Player.shared.jump(to: i); WidgetBridge.shared.changed() }
-        case "widgetlog":
-            let u = WidgetFiles.dir?.appendingPathComponent("widget.log")
-            let text = u.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "(no widget.log)"
-            Log.shared.write("widget.log:\n" + text.split(separator: "\n").suffix(15).joined(separator: "\n"))
-            let now = WidgetFiles.snapshot.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "(no now.json)"
-            Log.shared.write("now.json: \(now.prefix(400))")
         case "pause": p.pause()
         case "resume": p.resume()
         case "next": p.next()

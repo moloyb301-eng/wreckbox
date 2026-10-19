@@ -1,8 +1,8 @@
 import ActivityKit
 import UIKit
 
-/// The now-playing Live Activity (lock screen + Dynamic Island), fed by WidgetBridge with the same snapshot as the
-/// widgets, so it changes only when they do.
+/// The now-playing Live Activity (lock screen + Dynamic Island), fed by WidgetBridge, so it changes only when
+/// something it shows does.
 ///  - iOS only lets an app start one while it's in front: it starts when music plays with the app open (or when the
 ///    app comes to the front with music playing), then stays — paused too — until the queue empties, it's switched
 ///    off in Settings, or the app quits. Updates from the background are fine.

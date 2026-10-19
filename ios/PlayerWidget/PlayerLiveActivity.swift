@@ -16,7 +16,7 @@ struct PlayerLiveActivity: Widget {
             LockScreenView(state: context.state, stale: context.isStale)
                 .activityBackgroundTint(Color(hex: 0x16141C))
                 .activitySystemActionForegroundColor(Y2K.lilac)
-                .widgetURL(PlayerWidgetView.openURL)
+                .widgetURL(NowPlaying.openURL)
         } dynamicIsland: { context in
             let st = context.state
             let s = snapshot(st, stale: context.isStale)
@@ -67,7 +67,7 @@ struct PlayerLiveActivity: Widget {
                 Cover(art: st.art, size: 24, radius: 12)
             }
             .keylineTint(Y2K.lilac)
-            .widgetURL(PlayerWidgetView.openURL)
+            .widgetURL(NowPlaying.openURL)
         }
     }
 
@@ -133,12 +133,12 @@ private struct TimeRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Group {
-                if s.playing && s.duration > 0 { Text(timerInterval: start...end, countsDown: false) } else { Text(PlayerWidgetView.time(s.position)) }
+                if s.playing && s.duration > 0 { Text(timerInterval: start...end, countsDown: false) } else { Text(NowPlaying.time(s.position)) }
             }
             .font(Y2K.dot(12, .black)).foregroundStyle(Y2K.peach).monospacedDigit()
             .frame(width: 38, alignment: .leading)
             SeekBar(fraction: s.duration > 0 ? min(1, s.position / s.duration) : 0).frame(height: 5)
-            Text(s.duration > 0 ? PlayerWidgetView.time(s.duration) : "--:--").font(Y2K.dot(12, .black)).foregroundStyle(Y2K.lilac.opacity(0.8))
+            Text(s.duration > 0 ? NowPlaying.time(s.duration) : "--:--").font(Y2K.dot(12, .black)).foregroundStyle(Y2K.lilac.opacity(0.8))
                 .monospacedDigit().frame(width: 38, alignment: .trailing)
         }
     }

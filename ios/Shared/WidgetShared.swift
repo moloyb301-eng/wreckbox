@@ -3,8 +3,7 @@ import CoreText
 import Foundation
 import WidgetKit
 
-/// What the widgets show, written by the app whenever the player changes (WidgetBridge) into the App Group folder
-/// both can read, and read by the widget extension.
+/// The player's state as the Live Activity needs it, built by the app whenever the player changes (WidgetBridge).
 struct WidgetSnapshot: Codable, Equatable {
     struct Upcoming: Codable, Equatable {
         var number: Int
@@ -47,32 +46,11 @@ struct WidgetSnapshot: Codable, Equatable {
 enum WidgetFiles {
     static let group = "group.com.moloybiswas.wreckbox.player"
     static var dir: URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) }
-    static var snapshot: URL? { dir?.appendingPathComponent("now.json") }
     static var art: URL? { dir?.appendingPathComponent("art.jpg") }
     static var shared: UserDefaults? { UserDefaults(suiteName: group) }
-
-    static func read() -> WidgetSnapshot? {
-        guard let u = snapshot else { log("no App Group folder"); return nil }
-        guard let d = try? Data(contentsOf: u) else { log("no now.json yet"); return nil }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .secondsSince1970
-        do { return try dec.decode(WidgetSnapshot.self, from: d) } catch { log("now.json unreadable: \(error)"); return nil }
-    }
-
-    /// A line in widget.log (App Group): what the widget extension did — the app passes it on to its test log.
-    static func log(_ s: String) {
-        guard let u = dir?.appendingPathComponent("widget.log") else { return }
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        let line = Data("\(f.string(from: Date())) \(s)\n".utf8)
-        if let h = try? FileHandle(forWritingTo: u) { h.seekToEndOfFile(); h.write(line); try? h.close() } else { try? line.write(to: u) }
-    }
 }
 
-/// The widget kind (WidgetCenter reloads it by this name).
-let widgetKind = "WreckBoxPlayerWidget"
-
-/// Urbanist and Doto, from whichever bundle runs this (the app or the widget extension).
+/// Urbanist and Doto, from whichever bundle runs this (the app or the Live Activity extension).
 enum WreckFonts {
     nonisolated(unsafe) private static var done = false
     static func register() {
