@@ -62,7 +62,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .tint(W.lilac)
         // The hidden pages (YouTube's backup player, Spotify's search): a 1-point clipped box keeps them in the window.
-        .background(alignment: .topLeading) { PageHost(views: [player.page.view, SpotifyPage.shared.view]).frame(width: 1, height: 1) }
+        .background(alignment: .topLeading) { PageHost(views: [player.page.view, SpotifyPage.shared.view, SpotifyPage.shared.libraryView]).frame(width: 1, height: 1) }
         .fullScreenCover(isPresented: $nav.playing) { NowPlayingPage() }
         .sheet(isPresented: $nav.settings) { SettingsSheet() }
         .sheet(isPresented: $nav.eq) { EqualiserSheet().presentationDetents([.medium, .large]).presentationBackground(.ultraThinMaterial) }
@@ -304,7 +304,7 @@ struct TrackRow: View {
         }
         Button(library.isLiked(track) ? "Unlike" : "Like", systemImage: library.isLiked(track) ? "heart.slash" : "heart") { library.toggleLike(track) }
         Button("Add to playlist…", systemImage: "music.note.list") { Nav.shared.addTo = track }
-        Button("Song radio", systemImage: "dot.radiowaves.left.and.right") { player.playList([track]) }
+        Button("Song radio", systemImage: "dot.radiowaves.left.and.right") { player.startRadio(track) }
         ForEach(alts, id: \.key) { alt in Button("Play from \(alt.source.label)", systemImage: "play") { player.playList([alt]) } }
         if let i = inQueue {
             Divider()
@@ -347,7 +347,7 @@ struct PlayShuffle: View {
         HStack(spacing: 10) {
             Pill(label: "Play", icon: "play.fill", style: .primary, enabled: !tracks.isEmpty) { Player.shared.playList(tracks) }
             Pill(label: "Shuffle", icon: "shuffle", enabled: !tracks.isEmpty) { Player.shared.playList(tracks, shuffled: true) }
-            if let radio { Pill(label: "Radio", icon: "dot.radiowaves.left.and.right", style: .smart) { Player.shared.playList([radio]) } }
+            if let radio { Pill(label: "Radio", icon: "dot.radiowaves.left.and.right", style: .smart) { Player.shared.startRadio(radio) } }
             Spacer()
             Text("\(tracks.count) songs").font(W.dot(11)).foregroundStyle(W.text3)
         }

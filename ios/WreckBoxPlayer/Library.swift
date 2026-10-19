@@ -18,7 +18,8 @@ struct Track: Codable, Hashable, Identifiable {
     var durationMs: Int64 = 0
     var art: String?
 
-    var key: String { "\(source.rawValue):\(id)" }
+    /// One per song. A song without an id (Spotify's short export has none) goes by its name instead.
+    var key: String { id.isEmpty ? "\(source.rawValue):~\(Radio.name(self))" : "\(source.rawValue):\(id)" }
     var duration: Double { Double(durationMs) / 1000 }
 }
 

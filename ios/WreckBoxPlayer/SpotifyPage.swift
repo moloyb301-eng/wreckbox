@@ -8,7 +8,9 @@ import WebKit
 final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = SpotifyPage()
 
+    /// Searches run here; reading your library runs in `libraryView`, so neither moves the page under the other.
     let view: WKWebView
+    let libraryView: WKWebView
     private var pending: CheckedContinuation<[Track], Error>?
     private var pendingData: CheckedContinuation<JSON, Error>?
     /// The page is loaded and showing Spotify: a new search can move inside it instead of reloading it.
@@ -35,12 +37,13 @@ final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
                       data: function (s) { window.webkit.messageHandlers.wb.postMessage({ k: 'data', v: s }); } };
         """
         cfg.userContentController.addUserScript(WKUserScript(source: bridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Both pages share the content controller (the bridge) and the sign-in (the default data store).
         view = WKWebView(frame: CGRect(x: 0, y: 0, width: 1280, height: 900), configuration: cfg)
-        view.customUserAgent = WebEngine.userAgent
-        view.isInspectable = true
+        libraryView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1280, height: 900), configuration: cfg)
+        for v in [view, libraryView] { v.customUserAgent = WebEngine.userAgent; v.isInspectable = true }
         super.init()
         cfg.userContentController.add(Weak(self), name: "wb")
-        view.navigationDelegate = self
+        libraryView.navigationDelegate = self
     }
 
     func search(_ q: String) async throws -> [Track] {
@@ -77,11 +80,13 @@ final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
             try await withCheckedThrowingContinuation { cont in
                 pendingData = cont
                 runLibraryOnLoad = true
-                live = false
-                view.load(URLRequest(url: URL(string: "https://open.spotify.com/collection/tracks")!))
+                libraryView.load(URLRequest(url: URL(string: "https://open.spotify.com/collection/tracks")!))
             }
         } onCancel: {
-            Task { @MainActor in self.pendingData?.resume(throwing: CancellationError()); self.pendingData = nil; self.runLibraryOnLoad = false }
+            Task { @MainActor in
+                self.pendingData?.resume(throwing: CancellationError()); self.pendingData = nil; self.runLibraryOnLoad = false
+                self.unloadLibrary()
+            }
         }
     }
 
@@ -89,10 +94,13 @@ final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
     private var runLibraryOnLoad = false
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard runLibraryOnLoad, webView.url?.host == "open.spotify.com" else { return }
+        guard webView === libraryView, runLibraryOnLoad, webView.url?.host == "open.spotify.com" else { return }
         runLibraryOnLoad = false
-        after(2) { self.view.evaluateJavaScript(Self.libraryScript, completionHandler: nil) }
+        after(2) { self.libraryView.evaluateJavaScript(Self.libraryScript, completionHandler: nil) }
     }
+
+    /// The library is read (or given up on): its page goes.
+    private func unloadLibrary() { libraryView.load(URLRequest(url: URL(string: "about:blank")!)) }
 
     /// What the hidden page shows (for the test log).
     func describe() async -> String {
@@ -109,7 +117,7 @@ final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
         idle?.cancel()
         idle = Task {
             try? await Task.sleep(for: .seconds(120))
-            guard !Task.isCancelled, pending == nil, pendingData == nil else { return }
+            guard !Task.isCancelled, pending == nil else { return }
             live = false
             view.load(URLRequest(url: URL(string: "about:blank")!))
         }
@@ -133,10 +141,9 @@ final class SpotifyPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
             parkLater()
         case "data":
             let j = (try? JSONSerialization.jsonObject(with: Data(v.utf8)) as? JSON) ?? ["error": "unreadable answer"]
-            live = j["error"] == nil
             pendingData?.resume(returning: j)
             pendingData = nil
-            parkLater()
+            unloadLibrary()
         default: break
         }
     }

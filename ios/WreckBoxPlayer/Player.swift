@@ -47,6 +47,10 @@ final class Player: ObservableObject {
     private var streams: [String: YouTubeStream.Stream] = [:]
     /// Songs whose direct link failed this session: they go straight to the page.
     private var noDirect: Set<String> = []
+    /// The YouTube Music match a Spotify song plays from, by the Spotify song's key.
+    private var matches: [String: String] = [:]
+    /// Playing when a call (Siri, an alarm, another app) took the audio: it plays on when that ends.
+    private var interrupted = false
 
     private init() {
         native.onEnd = { [weak self] next in self?.nativeEnded(next) }
@@ -74,13 +78,18 @@ final class Player: ObservableObject {
         radioGen += 1
         radioTask?.cancel(); radioTask = nil; radioLoading = false
         radioKeys = []; radioFrom = nil
-        // One entry per song; shuffle starts on a random song.
-        let first = shuffled ? tracks.randomElement() : tracks[safe: max(0, min(start, tracks.count - 1))]
+        // One entry per song; shuffle starts on a random song, with all the others shuffled after it.
         var seen = Set<String>()
         queue = tracks.filter { seen.insert($0.key).inserted }
+        let first = tracks[safe: max(0, min(start, tracks.count - 1))]
         index = max(0, queue.firstIndex { $0.key == first?.key } ?? 0)
         shuffle = false
-        if shuffled { shuffleUpcoming(true) }
+        if shuffled {
+            original = queue
+            queue.shuffle()
+            index = 0
+            shuffle = true
+        }
         playWhenReady = true
         startCurrent()
     }
@@ -200,9 +209,17 @@ final class Player: ObservableObject {
 
     func setAutoplay(_ on: Bool) { Prefs.autoplay = on; if on { maybeAutoplay() }; objectWillChange.send() }
 
+    /// Song radio: this song, then songs like it (whatever the autoplay setting).
+    func startRadio(_ t: Track) {
+        if repeatMode == .one { repeatMode = .off }
+        playList([t])
+        if radioTask == nil { fetchRadio(t) }
+    }
+
     // MARK: playing
 
-    private var lastPos = 0.0, lastDur = 0.0, baseDur = 0.0, lastMoved = Date(), nudged = false, lastNudge = Date.distantPast
+    /// `nudged`: the direct link was fetched again once; `pageNudged`: the page was nudged once mid-song.
+    private var lastPos = 0.0, lastDur = 0.0, baseDur = 0.0, lastMoved = Date(), nudged = false, pageNudged = false, lastNudge = Date.distantPast
     private var seenV: String?
 
     private func startCurrent() {
@@ -214,32 +231,47 @@ final class Player: ObservableObject {
         message = nil
         buffering = true
         startedAt = Date()
-        lastPos = 0; lastDur = 0; baseDur = 0; seenV = nil; lastMoved = startedAt; nudged = false
+        lastPos = 0; lastDur = 0; baseDur = 0; seenV = nil; lastMoved = startedAt; nudged = false; pageNudged = false
         quality = nil
         Library.shared.played(t)
         Log.shared.write("play \(t.source.tag) \(t.id) “\(t.title)” — \(t.artist)")
         changed()
         Task {
             // Spotify songs play from their YouTube Music match (free, no account).
-            var t = t
-            if t.source == .spotify {
-                guard let id = await Radio.findOnYouTube(t) else { return guardGen(gen) { failed("Not found on YouTube Music") } }
-                t = Track(source: .youtube, id: id, title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs, art: t.art)
-            }
+            guard let id = await match(t) else { return guardGen(gen) { failed("Not found on YouTube Music") } }
             guard gen == startGen else { return }
             switch t.source {
             case .local:
                 usePage(false)
-                guard await native.load(LocalFiles.url(t.id), key: current!.key, ends: t.duration), gen == startGen else { return }
+                guard await native.load(LocalFiles.url(t.id), key: t.key, ends: t.duration), gen == startGen else { return }
                 quality = LocalFiles.quality(t.id)
                 if playWhenReady { native.play() }
+                lineUpNext()
             case .youtube, .spotify:
-                await startYouTube(t.id, key: current!.key, gen: gen)
+                await startYouTube(id, key: t.key, gen: gen)
             }
         }
     }
 
     private func guardGen(_ gen: Int, _ f: () -> Void) { if gen == startGen { f() } }
+
+    /// What the song plays from: its file name or video id, or a Spotify song's YouTube Music match (looked up once).
+    private func match(_ t: Track) async -> String? {
+        guard t.source == .spotify else { return t.id }
+        if let id = matches[t.key] { return id }
+        guard let id = await Radio.findOnYouTube(t) else { return nil }
+        matches[t.key] = id
+        return id
+    }
+
+    /// The video a YouTube or Spotify song plays from, when it's known.
+    private func videoId(_ t: Track) -> String? {
+        switch t.source {
+        case .youtube: return t.id
+        case .spotify: return matches[t.key]
+        case .local: return nil
+        }
+    }
 
     /// Direct stream first; the page when there isn't one.
     private func startYouTube(_ id: String, key: String, gen: Int) async {
@@ -251,11 +283,17 @@ final class Player: ObservableObject {
             Log.shared.write("direct \(s.quality) itag \(s.itag)")
             if playWhenReady { native.play() }
             publish()
+            lineUpNext()
             return
         }
         guard gen == startGen else { return }
         Log.shared.write("no direct stream for \(id): playing in the page")
         usePage(true)
+        // The page starts afresh (also when it takes over mid-song): its start and stall checks count from now.
+        buffering = true
+        startedAt = Date()
+        lastPos = 0; lastDur = 0; baseDur = 0; seenV = nil; lastMoved = startedAt; pageNudged = false
+        publish()
         if playWhenReady { page.playTrack(id) }
     }
 
@@ -282,6 +320,7 @@ final class Player: ObservableObject {
     }
 
     func pause() {
+        interrupted = false
         playWhenReady = false
         switch mode {
         case .native: native.pause()
@@ -293,6 +332,7 @@ final class Player: ObservableObject {
 
     func resume() {
         guard current != nil else { return }
+        interrupted = false
         playWhenReady = true
         switch mode {
         case .native: if native.hasItem { native.play() } else { startCurrent() }
@@ -312,7 +352,7 @@ final class Player: ObservableObject {
             startedAt = Date()
             logHeard()
             heard = (current!, 0, current!.durationMs)
-            quality = current.flatMap { $0.source == .local ? LocalFiles.quality($0.id) : streams[$0.id]?.quality }
+            quality = current.flatMap { $0.source == .local ? LocalFiles.quality($0.id) : videoId($0).flatMap { streams[$0]?.quality } }
             Library.shared.played(current!)
             Log.shared.write("next (queued) “\(current!.title)”")
             changed()
@@ -325,22 +365,23 @@ final class Player: ObservableObject {
         guard let t = current, t.key == key else { return }
         Log.shared.write("direct playback failed: \(why)")
         if t.source == .local { return failed("Couldn't play this file") }
+        guard let id = videoId(t) else { return failed("This song didn't play") }
         // An old link: fetch a new one once; after that, the page.
-        if streams.removeValue(forKey: t.id) == nil || nudged { noDirect.insert(t.id) }
+        if streams.removeValue(forKey: id) == nil || nudged { noDirect.insert(id) }
         nudged = true
         let gen = startGen
-        Task { await startYouTube(t.id, key: key, gen: gen) }
+        Task { await startYouTube(id, key: key, gen: gen) }
     }
 
     /// Fetches and lines up the next YouTube song, so it starts by itself when this one ends.
     private func lineUpNext() {
-        guard mode == .native, let n = upNext, n.source == .youtube || n.source == .local else { return native.unqueue() }
+        guard mode == .native, let n = upNext else { return native.unqueue() }
         if native.queuedKey == n.key { return }
         if n.source == .local { Task { await native.queue(LocalFiles.url(n.id), key: n.key, ends: n.duration) }; return }
-        guard !noDirect.contains(n.id) else { return native.unqueue() }
+        if let id = videoId(n), noDirect.contains(id) { return native.unqueue() }
         Task {
             // Still the next song once the link is here?
-            guard let s = await stream(n.id), mode == .native, upNext?.key == n.key else { return }
+            guard let id = await match(n), !noDirect.contains(id), let s = await stream(id), mode == .native, upNext?.key == n.key else { return }
             await native.queue(s.url, key: n.key, ends: s.duration)
         }
     }
@@ -365,7 +406,7 @@ final class Player: ObservableObject {
             if let v {
                 if seenV == nil { seenV = v } else if v != seenV { return pageEnded("video id changed") }
                 let ours = t.duration > 0 ? t.duration : baseDur
-                if v != t.id, ours > 0, st.position >= ours - 5 { return pageEnded("glided into the next video") }
+                if v != videoId(t), ours > 0, st.position >= ours - 5 { return pageEnded("glided into the next video") }
             }
         }
         let wrapped = lastDur > 5 && lastPos > lastDur - 4 && st.position < 2 && !st.ad
@@ -381,7 +422,7 @@ final class Player: ObservableObject {
         if playWhenReady, !buffering, st.duration > 0, now.timeIntervalSince(lastMoved) > 6 {
             if st.position > st.duration - 12 { return pageEnded("stalled near the end") }
             if now.timeIntervalSince(lastMoved) > 20 { return failed("The song stalled") }
-            if !nudged { nudged = true; page.play() }
+            if !pageNudged { pageNudged = true; page.play() }
         }
         if playWhenReady, buffering, now.timeIntervalSince(startedAt) > 25 { return failed("YouTube didn't start this song") }
         objectWillChange.send()
@@ -436,6 +477,11 @@ final class Player: ObservableObject {
     /// On the last or second-last song (and not repeating): fetch songs similar to the one playing and add them.
     private func maybeAutoplay() {
         guard let seed = current, Prefs.autoplay, repeatMode == .off, index >= queue.count - 2, radioTask == nil else { return }
+        fetchRadio(seed)
+    }
+
+    /// Fetches songs similar to `seed` and adds them to the end of the queue.
+    private func fetchRadio(_ seed: Track) {
         let gen = radioGen
         radioLoading = true
         radioTask = Task { [weak self] in
@@ -537,7 +583,8 @@ final class Player: ObservableObject {
         }
     }
 
-    /// Calls and alarms pause us and hand back; unplugging headphones / AirPods out pauses.
+    /// Calls and alarms pause us (and we play on after, when we were playing and iOS says to); unplugging headphones /
+    /// AirPods out pauses.
     private func setUpAudioSession() {
         let s = AVAudioSession.sharedInstance()
         try? s.setCategory(.playback, mode: .default, policy: .longFormAudio)
@@ -548,7 +595,15 @@ final class Player: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 Log.shared.write("audio interruption \(type == .began ? "began" : "ended")\(resume ? " (resume)" : "")")
-                if type == .ended, resume, self.playWhenReady { self.resume() }
+                switch type {
+                case .began:
+                    // iOS has stopped the sound: show paused (and stop counting it as heard) until it hands back.
+                    if self.playWhenReady { self.pause(); self.interrupted = true }
+                case .ended:
+                    if self.interrupted, resume { self.resume() }
+                    self.interrupted = false
+                default: break
+                }
             }
         }
         NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: s, queue: .main) { [weak self] n in

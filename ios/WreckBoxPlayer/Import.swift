@@ -41,17 +41,33 @@ final class Import: ObservableObject {
         status = "Reading your YouTube Music history…"
         let items = try await YouTubeMusic.history()
         let liked = (try? await YouTubeMusic.liked()) ?? []
-        // The page has no times, only "Today", "Yesterday", "This week"…: only the songs above the newest one seen last
-        // time are new, and each gets a time inside its section.
-        let lastTop = d.string(forKey: "ytImportTop")
-        let fresh = items.prefix { $0.track.id != lastTop }
+        // The page has no times, only "Today", "Yesterday", "This week"…, and lists each song once, at its latest play:
+        // the songs played since last time are the ones above the list as it was then. Each gets a time inside its
+        // section.
+        let last = d.stringArray(forKey: "ytImportSeen") ?? d.string(forKey: "ytImportTop").map { [$0] } ?? []
+        let fresh = items.prefix(Self.newOnTop(items.map(\.track.id), last))
         let now = Date().timeIntervalSince1970
         let plays = fresh.enumerated().map { i, e in History.Play(track: e.track, at: Self.sectionTime(e.when, now) - Double(i) * 60, listenedMs: e.track.durationMs) }
-        let added = History.shared.importPlays("youtube", plays, newerOnly: false)
+        let added = History.shared.importPlays("youtube", plays, onlyNew: false)
         History.shared.importFavourites("youtube-liked", liked, weight: 1)
         d.set(now, forKey: "ytImportAt")
-        if let top = items.first { d.set(top.track.id, forKey: "ytImportTop") }
+        if !items.isEmpty { d.set(items.map(\.track.id), forKey: "ytImportSeen") }
         status = "YouTube Music: \(added) new plays, \(liked.count) liked songs"
+    }
+
+    /// How many songs at the top of `ids` were played since the list was `last`. The songs not played since are
+    /// still in last time's order, at the bottom; a played one moved to the top, out of that order (or is new).
+    static func newOnTop(_ ids: [String], _ last: [String]) -> Int {
+        guard !last.isEmpty else { return ids.count }
+        let at = Dictionary(last.enumerated().map { ($1, $0) }) { a, _ in a }
+        var i = ids.count
+        // Songs at the bottom that last time's list didn't reach are old.
+        while i > 0, at[ids[i - 1]] == nil { i -= 1 }
+        guard i > 0 else { return ids.count }
+        var below = at[ids[i - 1]]!
+        i -= 1
+        while i > 0, let p = at[ids[i - 1]], p < below { below = p; i -= 1 }
+        return i
     }
 
     private static func sectionTime(_ section: String, _ now: Double) -> Double {

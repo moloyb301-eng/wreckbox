@@ -32,6 +32,8 @@ final class History: ObservableObject {
         var artists: [String: Double] = [:]
         var recent: [String] = []
         var imported: [String: Double] = [:]
+        /// Per export source, the time spans its imported files covered ([from, to]; optional: older files lack it).
+        var covered: [String: [[Double]]]?
     }
 
     @Published private(set) var data = Data()
@@ -66,12 +68,17 @@ final class History: ObservableObject {
 
     struct Play { var track: Track; var at: Double; var listenedMs: Int64 = 0 }
 
-    /// Imported plays; a source can be imported again without counting the same plays twice (`imported` remembers up
-    /// to which time it was imported).
+    /// Imported plays; a source can be imported again without counting the same plays twice (`covered` remembers the
+    /// time spans imported files held, so files can come in any order: a year's file after the newer ones, the full
+    /// history after the short one). `onlyNew: false` takes every play (the caller has picked the new ones).
     @discardableResult
-    func importPlays(_ source: String, _ plays: [Play], newerOnly: Bool = true) -> Int {
-        let since = newerOnly ? data.imported[source] ?? 0 : 0
-        let fresh = plays.filter { $0.at > since }
+    func importPlays(_ source: String, _ plays: [Play], onlyNew: Bool = true) -> Int {
+        // Imported before spans were kept: everything up to the old mark counts as covered.
+        let spans = data.covered?[source] ?? data.imported[source].map { [[0, $0]] } ?? []
+        let fresh = onlyNew ? plays.filter { p in !spans.contains { $0[0] <= p.at && p.at <= $0[1] } } : plays
+        if onlyNew, let lo = plays.map(\.at).min(), let hi = plays.map(\.at).max() {
+            update { $0.covered = ($0.covered ?? [:]).merging([source: Self.merge(spans + [[lo, hi]])]) { $1 } }
+        }
         guard !fresh.isEmpty else { return 0 }
         update { d in
             for p in fresh {
@@ -93,6 +100,15 @@ final class History: ObservableObject {
             d.imported[source] = max(d.imported[source] ?? 0, fresh.map(\.at).max() ?? 0)
         }
         return fresh.count
+    }
+
+    /// Overlapping spans joined into one.
+    private static func merge(_ spans: [[Double]]) -> [[Double]] {
+        var out: [[Double]] = []
+        for s in spans.filter({ $0.count == 2 }).sorted(by: { $0[0] < $1[0] }) {
+            if let last = out.last, s[0] <= last[1] { out[out.count - 1][1] = max(last[1], s[1]) } else { out.append(s) }
+        }
+        return out
     }
 
     /// Songs with weight but no plays to count (liked on a service, in a top list): `weight` each.
