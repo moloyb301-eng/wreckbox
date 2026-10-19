@@ -1,0 +1,157 @@
+import SwiftUI
+import UIKit
+import WidgetKit
+
+/// Keeps the widgets current and runs their buttons.
+///  - Out: the player's state as WidgetSnapshot (now.json + art.jpg in the App Group folder), then WidgetCenter
+///    reloads them. Written only when something they show changed (or the position jumped) — the widgets run their own
+///    clock and progress from `position`/`at`. (Port of the Mac Player's WidgetBridge.)
+///  - In: PlayerCommandIntent (the widgets' buttons) → `run`.
+@MainActor
+final class WidgetBridge {
+    static let shared = WidgetBridge()
+    private var pending = false
+    private var lastSig = ""
+    private var lastArt: String?
+    /// The cover whose picture is in art.jpg now ("" none): the Live Activity's art key.
+    private var artReady = ""
+    private var lastSnap: WidgetSnapshot?
+    private var lastLogged: String?
+    private var lastPos: (pos: Double, at: Date, playing: Bool) = (0, .distantPast, false)
+
+    /// Hooks the widgets' buttons up to the player (at app start).
+    func start() {
+        WidgetActions.run = { [weak self] c in self?.run(c) }
+        WidgetActions.preset = { [weak self] p in Log.shared.write("widget: preset \(p)"); EQ.shared.choose(p); self?.changed() }
+        WidgetActions.jump = { [weak self] i in Log.shared.write("widget: play #\(i + 1)"); Player.shared.jump(to: i); self?.changed() }
+
+        if WidgetFiles.dir == nil { Log.shared.write("widgets: no App Group folder (the widgets can't see the player)") }
+        LiveActivityBridge.shared.start()
+        // Fresh data for the widgets every time the app starts (and after an update).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            Self.removeOldPictures()
+            self?.lastArt = "-"
+            self?.lastSig = ""
+            self?.write()
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    /// Something changed: write soon (changes come in bursts).
+    func changed() {
+        guard !pending else { return }
+        pending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.pending = false
+            self?.write()
+        }
+    }
+
+    private func write() {
+        guard let dir = WidgetFiles.dir, let snapURL = WidgetFiles.snapshot, let artURL = WidgetFiles.art else { return Log.shared.write("widgets: no App Group folder") }
+        let p = Player.shared
+        let t = p.current
+        let eq = EQ.shared
+        let upcoming = p.queue.enumerated().dropFirst(p.index + 1).prefix(5).map {
+            WidgetSnapshot.Upcoming(number: $0.offset + 1, title: $0.element.title, artist: $0.element.artist)
+        }
+        let snap = WidgetSnapshot(
+            title: t?.title, artist: t?.artist, source: t?.source.rawValue, quality: p.quality, playing: p.playing,
+            position: p.position, duration: p.duration, at: Date(), track: t == nil ? "" : String(format: "%03d/%03d", p.index + 1, p.queue.count),
+            shuffle: p.shuffle, repeatMode: p.repeatMode.rawValue, liked: t.map(Library.shared.isLiked) ?? false,
+            eqOn: eq.on, eqPreset: eq.preset, eqGains: eq.gains, upcoming: Array(upcoming), hasArt: t?.art != nil)
+        // The position only matters when it jumped (a seek) — otherwise the widgets' clock runs by itself.
+        let expected = lastPos.playing ? lastPos.pos + Date().timeIntervalSince(lastPos.at) : lastPos.pos
+        let sig = [snap.title ?? "", snap.artist ?? "", snap.quality ?? "", "\(snap.playing)", "\(Int(snap.duration))", snap.track,
+                   "\(snap.shuffle)", "\(snap.repeatMode)", "\(snap.liked)", "\(snap.eqOn)", snap.eqPreset, snap.eqGains.map { String($0) }.joined(separator: ","),
+                   upcoming.map(\.title).joined(separator: "|")].joined(separator: "§")
+        guard sig != lastSig || abs(snap.position - expected) > 2.5 else { return }
+        lastSig = sig
+        lastPos = (snap.position, Date(), snap.playing)
+        lastSnap = snap
+
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+        do { try enc.encode(snap).write(to: snapURL, options: .atomic) } catch { Log.shared.write("widgets: couldn't write (\(error.localizedDescription))") }
+        if snap.title != lastLogged { lastLogged = snap.title; Log.shared.write("widgets: now \(snap.title ?? "-") (\(snap.playing ? "playing" : "paused"))") }
+        if t?.art != lastArt {
+            lastArt = t?.art
+            let art = t?.art
+            Task {
+                // Only the Live Activity shows the cover, at 58 points at most: 128 pixels is plenty (and its
+                // renderer has even less memory than the widgets').
+                if let img = await Images.shared.load(art, size: 60), let small = Self.shrink(img, 128), let d = small.jpegData(compressionQuality: 0.8) {
+                    try? d.write(to: artURL, options: .atomic)
+                    self.artReady = art ?? ""
+                } else {
+                    try? FileManager.default.removeItem(at: artURL)
+                    self.artReady = ""
+                }
+                WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
+                if let s = self.lastSnap { LiveActivityBridge.shared.sync(s, art: self.artReady) }
+            }
+        } else {
+            WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
+        }
+        LiveActivityBridge.shared.sync(snap, art: artReady)
+    }
+
+    private static func shrink(_ img: UIImage, _ px: CGFloat) -> UIImage? {
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: px, height: px), format: f).image { _ in img.draw(in: CGRect(x: 0, y: 0, width: px, height: px)) }
+    }
+
+    /// The widgets used to draw pictures the app made (casing, record, blurred cover); they're all shapes now.
+    private static func removeOldPictures() {
+        guard let dir = WidgetFiles.dir, let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        for f in files where f.hasPrefix("shell-") || ["record.png", "tile.png", "art-bg.jpg"].contains(f) {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+        }
+    }
+
+    /// Testing the widgets' drawing without the home screen: draws each size (the large one with each drawer) in the
+    /// app as images in Documents (widget-small.png, widget-medium.png, widget-large-<drawer>.png), at the iPhone 14
+    /// Plus's widget sizes, and logs how long each took. (The real check is the home screen: see ios/UITests.)
+    func lab() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        func entry(_ size: CGSize, drawer: Int = 1) -> PlayerEntry? {
+            guard var e = PlayerProvider.entry(size: size) else { return nil }
+            e.drawer = drawer
+            return e
+        }
+        let small = CGSize(width: 176, height: 176), medium = CGSize(width: 371, height: 176), large = CGSize(width: 371, height: 387)
+        var jobs: [(String, WidgetFamily, CGSize, PlayerEntry?)] = [("small", .systemSmall, small, entry(small)), ("medium", .systemMedium, medium, entry(medium))]
+        for d in [-1, 0, 1, 2] { jobs.append(("large-\(d)", .systemLarge, large, entry(large, drawer: d))) }
+        for (name, family, size, entry) in jobs {
+            guard let entry else { Log.shared.write("widgetlab: no now.json"); return }
+            let started = Date()
+            let view = PlayerWidgetView(entry: entry, lab: true, labFamily: family)
+                .frame(width: size.width, height: size.height).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            let r = ImageRenderer(content: view)
+            r.scale = 3
+            let png = r.uiImage?.pngData()
+            try? png?.write(to: docs.appendingPathComponent("widget-\(name).png"), options: .atomic)
+            Log.shared.write("widgetlab \(name): \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(png.map { "\($0.count / 1024) KB" } ?? "FAILED")")
+        }
+    }
+
+    /// A widget button.
+    func run(_ c: WidgetCommand) {
+        let p = Player.shared
+        Log.shared.write("widget: \(c.rawValue)")
+        switch c {
+        case .toggle: p.toggle()
+        case .next: p.next()
+        case .previous: p.previous()
+        case .like: if let t = p.current { Library.shared.toggleLike(t) }
+        case .shuffle: p.setShuffle(!p.shuffle)
+        case .repeatMode: p.cycleRepeat()
+        case .back10: p.skip(-10)
+        case .fwd10: p.skip(10)
+        case .eqToggle: EQ.shared.setOn(!EQ.shared.on)
+        }
+        changed()
+    }
+}
