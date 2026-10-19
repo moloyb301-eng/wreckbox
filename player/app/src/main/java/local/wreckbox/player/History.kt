@@ -68,12 +68,14 @@ class History private constructor(private val file: File) {
     class Play(val track: Track, val at: Long, val listenedMs: Long = 0)
 
     /**
-     * Imported plays; a source can be imported again without counting the same plays twice ([source] remembers up to
-     * which time it was imported).
+     * Imported plays; a source can be imported again without counting the same plays twice ([source] remembers the
+     * newest play imported, "[source]:from" the oldest). Only plays outside that span are new: Spotify's short export
+     * (last year) and its full one (all time) can come in either order.
      */
     fun importPlays(source: String, plays: List<Play>, newerOnly: Boolean = true): Int {
-        val since = if (newerOnly) _data.value.imported[source] ?: 0 else 0
-        val fresh = plays.filter { it.at > since }
+        val to = if (newerOnly) _data.value.imported[source] ?: 0 else 0
+        val from = if (newerOnly) _data.value.imported["$source:from"] ?: 0 else 0
+        val fresh = plays.filter { it.at > to || it.at < from }
         if (fresh.isEmpty()) return 0
         update { d ->
             val songs = d.songs.toMutableMap()
@@ -88,7 +90,8 @@ class History private constructor(private val file: File) {
             }
             val recent = (fresh.sortedByDescending { it.at }.map { name(it.track) } + d.recent).distinct().take(200)
             d.copy(songs = songs, artists = artists, recent = if (d.recent.isEmpty()) recent else d.recent,
-                imported = d.imported + (source to maxOf(d.imported[source] ?: 0, fresh.maxOf { it.at })))
+                imported = d.imported + (source to maxOf(d.imported[source] ?: 0, fresh.maxOf { it.at })) +
+                    ("$source:from" to minOf(d.imported["$source:from"] ?: Long.MAX_VALUE, fresh.minOf { it.at })))
         }
         return fresh.size
     }
