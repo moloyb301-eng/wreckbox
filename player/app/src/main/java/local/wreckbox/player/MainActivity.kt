@@ -88,7 +88,10 @@ class MainActivity : ComponentActivity() {
         requestPermissions(
             if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_MEDIA_AUDIO)
             else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 1)
-        PlayerService.connect(this) { s -> player = s.player; intent?.let { test(it); widget(it) } }
+        // A widget press that opened the app stays in its launch intent: only act on it for a fresh launch, not when the
+        // app comes back from recents or after Android closed it.
+        val fresh = savedInstanceState == null && ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        PlayerService.connect(this) { s -> player = s.player; if (fresh) intent?.let { test(it); widget(it) } }
         if (intent?.getStringExtra("page") == "now") page = Page.NOW
         setContent {
             WreckBoxTheme {
