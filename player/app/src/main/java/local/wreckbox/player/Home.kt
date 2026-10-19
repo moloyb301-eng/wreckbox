@@ -64,8 +64,9 @@ fun HomePage(player: HybridPlayer, openSettings: () -> Unit, openPlaylist: (Stri
     }
     // The phone's songs: from memory after the first read; folders re-indexed at most twice a day (or "Rescan").
     var rescanTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(rescanTick) {
-        local = withContext(Dispatchers.IO) { runCatching { Local.cached(c) }.getOrDefault(emptyList()) }
+    val localVersion by Local.version.collectAsState()
+    LaunchedEffect(rescanTick, localVersion) {
+        local = withContext(Dispatchers.IO) { runCatching { if (localVersion > 0) Local.refresh(c) else Local.cached(c) }.getOrDefault(emptyList()) }
         if (rescanTick == 0 && !Local.scanDue(c)) return@LaunchedEffect
         val scanned = kotlinx.coroutines.CompletableDeferred<Unit>()
         Local.rescan(c) { scanned.complete(Unit) }

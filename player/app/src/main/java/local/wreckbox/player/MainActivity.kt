@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -84,7 +85,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Debug.init(this)
         enableEdgeToEdge()
-        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_MEDIA_AUDIO), 1)
+        requestPermissions(
+            if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_MEDIA_AUDIO)
+            else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 1)
         PlayerService.connect(this) { s -> player = s.player; intent?.let { test(it); widget(it) } }
         if (intent?.getStringExtra("page") == "now") page = Page.NOW
         setContent {
@@ -111,6 +114,14 @@ class MainActivity : ComponentActivity() {
         Screen.on.value = getSystemService(android.os.PowerManager::class.java).isInteractive
         // A new version shows the moment the app comes back to the front.
         lifecycleScope.launch { Updates.check(this@MainActivity) }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // Just allowed to see the phone's songs: read them again (the first read, before the answer, found none).
+        val audio = setOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.READ_EXTERNAL_STORAGE)
+        if (permissions.indices.any { permissions[it] in audio && grantResults.getOrNull(it) == android.content.pm.PackageManager.PERMISSION_GRANTED })
+            Local.version.value++
     }
 
     override fun onNewIntent(intent: Intent) {

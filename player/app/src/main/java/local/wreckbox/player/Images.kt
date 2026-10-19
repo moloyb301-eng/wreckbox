@@ -2,7 +2,9 @@ package local.wreckbox.player
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.util.LruCache
 import android.util.Size
 import androidx.compose.foundation.Image
@@ -51,13 +53,19 @@ object Images {
         cache.get(key)?.let { return it }
         val img = withContext(Dispatchers.IO) {
             runCatching {
-                if (url.startsWith("content://")) {
+                if (url.startsWith("content://") && Build.VERSION.SDK_INT >= 29) {
                     c.contentResolver.loadThumbnail(Uri.parse(url.removeSuffix("/albumart")), Size(size, size), null).asImageBitmap()
                 } else {
-                    val conn = URL(sized(url, size)).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 10000
-                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val bytes = if (url.startsWith("content://")) {
+                        // Before Android 10 there's no loadThumbnail: the cover inside the file.
+                        val r = MediaMetadataRetriever()
+                        try { r.setDataSource(c, Uri.parse(url.removeSuffix("/albumart"))); r.embeddedPicture } finally { r.release() } ?: return@runCatching null
+                    } else {
+                        val conn = URL(sized(url, size)).openConnection() as HttpURLConnection
+                        conn.connectTimeout = 8000
+                        conn.readTimeout = 10000
+                        conn.inputStream.use { it.readBytes() }
+                    }
                     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
                     var sample = 1

@@ -313,6 +313,8 @@ object Local {
     @Volatile private var cache: List<Track>? = null
     fun cached(c: Context): List<Track> = cache ?: all(c).also { cache = it }
     fun refresh(c: Context): List<Track> = all(c).also { cache = it }
+    /** Goes up when the phone's songs should be read again (e.g. the app was just allowed to see them). */
+    val version = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     /** Folders are re-indexed at most twice a day (it's disk work), or when asked. */
     fun scanDue(c: Context) = System.currentTimeMillis() - c.getSharedPreferences("settings", Context.MODE_PRIVATE).getLong("lastScan", 0) > 12 * 3600_000L
@@ -344,7 +346,9 @@ object Local {
     private fun query(c: Context, sel: String?, args: Array<String>?): List<Track> {
         val out = mutableListOf<Track>()
         val cols = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION, MediaStore.Audio.Media.RELATIVE_PATH,
+            // The folder: RELATIVE_PATH from Android 10, the file's full path before that.
+            MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION,
+            if (android.os.Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.RELATIVE_PATH else MediaStore.Audio.Media.DATA,
             MediaStore.Audio.Media.DISPLAY_NAME, MediaStore.Audio.Media.MIME_TYPE, MediaStore.Audio.Media.SIZE) +
             (if (android.os.Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.Audio.Media.BITRATE) else emptyArray()) +
             (if (android.os.Build.VERSION.SDK_INT >= 34) arrayOf(MediaStore.Audio.Media.SAMPLERATE, MediaStore.Audio.Media.BITS_PER_SAMPLE) else emptyArray())
@@ -356,7 +360,7 @@ object Local {
         c.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cols, where + (sel?.let { " AND $it" } ?: ""),
             args, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE")?.use { cur ->
             while (cur.moveToNext()) {
-                val dir = (cur.getString(5) ?: "").lowercase()
+                val dir = (cur.getString(5) ?: "").lowercase().let { if (android.os.Build.VERSION.SDK_INT >= 29) it else it.substringBeforeLast('/') + "/" }
                 val title = cur.getString(1) ?: ""
                 val file = cur.getString(6) ?: ""
                 if (notMusicDirs.any { dir.contains(it) } || notMusicName.matches(title) || notMusicName.matches(file)) continue

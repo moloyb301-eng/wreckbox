@@ -73,11 +73,10 @@ object Sync {
                 if (c.optBoolean("pending")) continue
                 val t = c.optString("token")
                 if (t.isEmpty()) { _state.value = _state.value.copy(code = null, error = c.optString("error", "That code expired — try again.")); return@launch }
-                prefs.edit().putString("token", t).putString("email", c.optString("email")).apply()
+                // Not merged yet: the account may hold playlists from another install, and an upload replaces them.
+                prefs.edit().putString("token", t).putString("email", c.optString("email")).putBoolean("merged", false).apply()
                 _state.value = State(linked = true, email = c.optString("email"))
-                // A new phone with nothing on it: bring the playlists back; otherwise send ours.
-                val lib = Library.get(app)
-                if (lib.data.value.playlists.isEmpty() && lib.data.value.likes.isEmpty()) restore() else push()
+                push()
                 return@launch
             }
             _state.value = _state.value.copy(code = null, error = "The code expired — get a new one.")
@@ -92,8 +91,15 @@ object Sync {
         _state.value = State()
     }
 
-    /** Sends the playlists and likes (all of them: the account keeps the Player's current set). */
+    /**
+     * Sends the playlists and likes (all of them: the account keeps the Player's current set). The first time after
+     * linking, what's on the account is added here first, so the upload can't delete it.
+     */
     fun push() = scope.launch {
+        if (!prefs.getBoolean("merged", true) && !merge()) {
+            _state.value = _state.value.copy(error = "Couldn't get your playlists from WreckBox — will try again.")
+            return@launch
+        }
         val d = Library.get(app).data.value
         val body = JSONObject()
             .put("playlists", JSONArray().also { a ->
@@ -110,8 +116,8 @@ object Sync {
     }
 
     /** Brings back what's saved on the account (new phone, reinstall): adds playlists and likes not here yet. */
-    fun restore() = scope.launch {
-        val j = runCatching { call("GET", "/v1/player/playlists", null, auth = true) }.getOrNull() ?: return@launch
+    private suspend fun merge(): Boolean {
+        val j = runCatching { call("GET", "/v1/player/playlists", null, auth = true) }.getOrNull() ?: return false
         val lib = Library.get(app)
         withContext(Dispatchers.Main) {
             j.optJSONArray("playlists")?.let { a ->
@@ -122,6 +128,8 @@ object Sync {
             }
             j.optJSONArray("likes").toTracks().reversed().forEach { if (!lib.isLiked(it)) lib.toggleLike(it) }
         }
+        prefs.edit().putBoolean("merged", true).apply()
+        return true
     }
 
     private fun call(method: String, path: String, body: JSONObject?, auth: Boolean = false): JSONObject {

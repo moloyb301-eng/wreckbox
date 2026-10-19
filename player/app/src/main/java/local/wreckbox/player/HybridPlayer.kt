@@ -105,12 +105,20 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         radioKeys = emptySet()
         radioFrom = null
         // The queue keeps one entry per song (Media3 needs unique ids): drop repeats, keep the tapped song's place.
-        // Shuffle starts on a random song, not always the list's first.
-        val first = if (shuffled) tracks.random() else tracks.getOrNull(start.coerceIn(tracks.indices))
-        queue = tracks.distinctBy { it.key }
-        index = queue.indexOfFirst { it.key == first?.key }.coerceAtLeast(0)
-        _shuffle = false // a new list: shuffle (if asked) starts over, else a second Shuffle press left the rest in order
-        if (shuffled) shuffleUpcoming(true)
+        val list = tracks.distinctBy { it.key }
+        if (shuffled) {
+            // Shuffle starts on a random song, not always the list's first, and every other song follows it.
+            val first = list.random()
+            queue = listOf(first) + list.filter { it.key != first.key }.shuffled()
+            index = 0
+            original = list
+            _shuffle = true
+        } else {
+            val first = tracks.getOrNull(start.coerceIn(tracks.indices))
+            queue = list
+            index = queue.indexOfFirst { it.key == first?.key }.coerceAtLeast(0)
+            _shuffle = false
+        }
         event("new list of ${tracks.size}: asked #$start ${tracks.getOrNull(start)?.key}, shuffled=$shuffled → #$index ${current()?.key}")
         playWhenReady = true
         startCurrent()
