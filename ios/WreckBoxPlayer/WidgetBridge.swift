@@ -22,8 +22,6 @@ final class WidgetBridge {
     /// Hooks the widgets' buttons up to the player (at app start).
     func start() {
         WidgetActions.run = { [weak self] c in self?.run(c) }
-        WidgetActions.preset = { [weak self] p in Log.shared.write("widget: preset \(p)"); EQ.shared.choose(p); self?.changed() }
-        WidgetActions.jump = { [weak self] i in Log.shared.write("widget: play #\(i + 1)"); Player.shared.jump(to: i); self?.changed() }
 
         if WidgetFiles.dir == nil { Log.shared.write("widgets: no App Group folder (the widgets can't see the player)") }
         LiveActivityBridge.shared.start()
@@ -111,33 +109,7 @@ final class WidgetBridge {
         }
     }
 
-    /// Testing the widgets' drawing without the home screen: draws each size (the large one with each drawer) in the
-    /// app as images in Documents (widget-small.png, widget-medium.png, widget-large-<drawer>.png), at the iPhone 14
-    /// Plus's widget sizes, and logs how long each took. (The real check is the home screen: see ios/UITests.)
-    func lab() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        func entry(_ size: CGSize, drawer: Int = 1) -> PlayerEntry? {
-            guard var e = PlayerProvider.entry(size: size) else { return nil }
-            e.drawer = drawer
-            return e
-        }
-        let small = CGSize(width: 176, height: 176), medium = CGSize(width: 371, height: 176), large = CGSize(width: 371, height: 387)
-        var jobs: [(String, WidgetFamily, CGSize, PlayerEntry?)] = [("small", .systemSmall, small, entry(small)), ("medium", .systemMedium, medium, entry(medium))]
-        for d in [-1, 0, 1, 2] { jobs.append(("large-\(d)", .systemLarge, large, entry(large, drawer: d))) }
-        for (name, family, size, entry) in jobs {
-            guard let entry else { Log.shared.write("widgetlab: no now.json"); return }
-            let started = Date()
-            let view = PlayerWidgetView(entry: entry, lab: true, labFamily: family)
-                .frame(width: size.width, height: size.height).clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            let r = ImageRenderer(content: view)
-            r.scale = 3
-            let png = r.uiImage?.pngData()
-            try? png?.write(to: docs.appendingPathComponent("widget-\(name).png"), options: .atomic)
-            Log.shared.write("widgetlab \(name): \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(png.map { "\($0.count / 1024) KB" } ?? "FAILED")")
-        }
-    }
-
-    /// A widget button.
+    /// A Live Activity button.
     func run(_ c: WidgetCommand) {
         let p = Player.shared
         Log.shared.write("widget: \(c.rawValue)")

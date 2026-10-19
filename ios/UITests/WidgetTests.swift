@@ -1,7 +1,7 @@
 import XCTest
 
-/// The widgets on a real home screen (the simulator's SpringBoard and iOS's own widget renderer): adds the Large
-/// widget the way a person does, then presses its buttons. Each step is printed ("STEP …") and leaves a pause so the
+/// The widget on a real home screen (the simulator's SpringBoard and iOS's own widget renderer): adds the Medium
+/// widget the way a person does, then taps it (it should open the app). Each step is printed ("STEP …") and leaves a pause so the
 /// host can take a screenshot (xcrun simctl io <sim> screenshot) — see ios/scripts/test-widget.sh.
 final class WidgetTests: XCTestCase {
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -21,7 +21,7 @@ final class WidgetTests: XCTestCase {
         return false
     }
 
-    func testAddLargeWidgetAndPressButtons() throws {
+    func testAddMediumWidgetAndOpenApp() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-wbPlay", "blinding lights the weeknd"]
         app.launch()
@@ -44,9 +44,9 @@ final class WidgetTests: XCTestCase {
         step("searched")
         if !tapFirst(["WreckBox Player"], in: springboard) { print("FAIL no WreckBox Player in gallery: \(springboard.debugDescription.prefix(4000))") }
         step("sizes")
-        // Sizes go small → medium → large: swipe to Large.
-        for _ in 0..<2 { springboard.swipeLeft(); sleep(1) }
-        step("large chosen")
+        // Sizes go small → medium: swipe to Medium.
+        springboard.swipeLeft(); sleep(1)
+        step("medium chosen")
         // The button's label includes its icon ("Add Widget" with a +): match loosely.
         let add = springboard.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Add Widget'")).firstMatch
         if add.waitForExistence(timeout: 5) { add.tap() } else { print("FAIL no Add Widget button: \(springboard.buttons.allElementsBoundByIndex.map(\.label))") }
@@ -54,37 +54,13 @@ final class WidgetTests: XCTestCase {
         _ = tapFirst(["Done"], in: springboard)
         step("widget on home", wait: 6)
 
-        // Press the widget's buttons: Queue tab is open by default — play the first song in it.
+        // Tap the widget: it opens the app (Now playing).
         let widget = springboard.otherElements.matching(NSPredicate(format: "label CONTAINS 'WreckBox'")).firstMatch
         print("widget exists: \(widget.exists) frame: \(widget.frame)")
         if widget.exists {
-            let f = widget.frame
-            // v6 layout, as fractions of the large widget's frame (from the widgetlab drawing).
-            func tap(_ fx: CGFloat, _ fy: CGFloat) { springboard.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + fx * f.width, dy: f.minY + fy * f.height)).tap() }
-            tap(0.30, 0.614)
-            step("tapped queue row 1", wait: 8)
-            tap(0.769, 0.219)
-            step("tapped play/pause", wait: 6)
-            tap(0.575, 0.457)
-            step("tapped EQ tab", wait: 6)
-            tap(0.84, 0.647)
-            step("tapped a preset", wait: 6)
-            tap(0.715, 0.457)
-            step("tapped Queue tab", wait: 4)
-            // Stress: the old widget went blank after a few presses. Play/pause, next, +10 s, tabs, fast.
-            for i in 0..<20 {
-                switch i % 5 {
-                case 0: tap(0.769, 0.219)
-                case 1: tap(0.90, 0.219)
-                case 2: tap(0.769, 0.094)
-                case 3: tap(0.575, 0.457)
-                default: tap(0.715, 0.457)
-                }
-                Thread.sleep(forTimeInterval: 0.8)
-            }
-            step("after 20 fast presses", wait: 6)
-            tap(0.769, 0.219)
-            step("final play/pause", wait: 6)
+            widget.tap()
+            print(app.wait(for: .runningForeground, timeout: 8) ? "OK app opened" : "FAIL app did not open")
+            step("tapped widget", wait: 4)
         }
         step("end", wait: 2)
     }

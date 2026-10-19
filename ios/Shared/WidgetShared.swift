@@ -51,12 +51,6 @@ enum WidgetFiles {
     static var art: URL? { dir?.appendingPathComponent("art.jpg") }
     static var shared: UserDefaults? { UserDefaults(suiteName: group) }
 
-    /// The large widget's open panel (0 Equaliser, 1 Queue, 2 Options).
-    static var drawer: Int {
-        get { shared?.object(forKey: "widgetDrawer") as? Int ?? 1 }
-        set { shared?.set(newValue, forKey: "widgetDrawer") }
-    }
-
     static func read() -> WidgetSnapshot? {
         guard let u = snapshot else { log("no App Group folder"); return nil }
         guard let d = try? Data(contentsOf: u) else { log("no now.json yet"); return nil }
@@ -91,7 +85,7 @@ enum WreckFonts {
     }
 }
 
-// MARK: - The widgets' buttons
+// MARK: - The Live Activity's buttons
 
 /// What a widget button asks for.
 enum WidgetCommand: String, AppEnum {
@@ -109,11 +103,9 @@ enum WidgetCommand: String, AppEnum {
 @MainActor
 enum WidgetActions {
     static var run: ((WidgetCommand) -> Void)?
-    static var preset: ((String) -> Void)?
-    static var jump: ((Int) -> Void)?
 }
 
-/// A widget button. An audio-playback intent: iOS runs it inside the app (starting the app in the background if it
+/// A Live Activity button. An audio-playback intent: iOS runs it inside the app (starting the app in the background if it
 /// isn't running), so the press acts at once without opening the app.
 struct PlayerCommandIntent: AudioPlaybackIntent {
     static let title: LocalizedStringResource = "WreckBox Player"
@@ -127,57 +119,6 @@ struct PlayerCommandIntent: AudioPlaybackIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         WidgetActions.run?(command)
-        return .result()
-    }
-}
-
-/// An EQ preset key in the Equaliser drawer.
-struct EQPresetIntent: AudioPlaybackIntent {
-    static let title: LocalizedStringResource = "WreckBox EQ preset"
-    static let isDiscoverable = false
-
-    @Parameter(title: "Preset") var preset: String
-
-    init() {}
-    init(_ preset: String) { self.preset = preset }
-
-    @MainActor
-    func perform() async throws -> some IntentResult {
-        WidgetActions.preset?(preset)
-        return .result()
-    }
-}
-
-/// A song in the Queue drawer: plays it.
-struct JumpIntent: AudioPlaybackIntent {
-    static let title: LocalizedStringResource = "WreckBox play from queue"
-    static let isDiscoverable = false
-
-    @Parameter(title: "Place in the queue") var index: Int
-
-    init() {}
-    init(_ index: Int) { self.index = index }
-
-    @MainActor
-    func perform() async throws -> some IntentResult {
-        WidgetActions.jump?(index)
-        return .result()
-    }
-}
-
-/// A tab on the large widget: shows that panel. Runs in the widget; it redraws itself.
-struct DrawerIntent: AppIntent {
-    static let title: LocalizedStringResource = "WreckBox widget drawer"
-    static let isDiscoverable = false
-
-    @Parameter(title: "Drawer") var drawer: Int
-
-    init() {}
-    init(_ drawer: Int) { self.drawer = drawer }
-
-    func perform() async throws -> some IntentResult {
-        WidgetFiles.drawer = drawer
-        WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
         return .result()
     }
 }

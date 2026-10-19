@@ -14,7 +14,7 @@ enum DevCommands {
             play(args[i + 1])
         }
         // A script of commands, each after a pause (the simulator asks before opening every wreckbox:// link):
-        //   -wbRun "8 jump?i=2; 6 widgetlab"   → after 8 s jump, 6 s later widgetlab
+        //   -wbRun "8 jump?i=2; 6 state"   → after 8 s jump, 6 s later state
         if let i = args.firstIndex(of: "-wbRun"), i + 1 < args.count {
             var at = 0.0
             for step in args[i + 1].split(separator: ";") {
@@ -55,8 +55,7 @@ enum DevCommands {
             case "artist": if let q = arg("q") { Task { if let r = try? await YouTubeMusic.search(q), let a = ([r.top].compactMap { $0 } + r.artists).first(where: { if case .artist = $0 { true } else { false } }) { n.tab = .home; n.homePath.append(a) } } }
             default: break
             }
-        case "widgetlab": WidgetBridge.shared.lab()
-        case "jump": if let i = arg("i").flatMap(Int.init) { WidgetActions.jump?(i) }
+        case "jump": if let i = arg("i").flatMap(Int.init) { Player.shared.jump(to: i); WidgetBridge.shared.changed() }
         case "widgetlog":
             let u = WidgetFiles.dir?.appendingPathComponent("widget.log")
             let text = u.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "(no widget.log)"
