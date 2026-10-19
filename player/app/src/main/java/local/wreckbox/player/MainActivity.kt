@@ -510,9 +510,54 @@ fun SettingsSheet(close: () -> Unit) {
                     Switch(adblock, { adblock = it; AdBlock.enabled = it; prefs.edit().putBoolean("adblock", it).apply() },
                         colors = SwitchDefaults.colors(checkedTrackColor = W.lilac, checkedThumbColor = Color.White))
                 }
+                DotLabel("Help", Modifier.padding(top = 18.dp, bottom = 10.dp))
+                ReportProblem()
             }
         }
     }
+}
+
+/** Settings → Report a problem: a note + the app's recent log, sent to the developer (BugReport). */
+@Composable
+fun ReportProblem() {
+    var open by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Report a problem", style = W.ui(15.sp, FontWeight.SemiBold))
+            Text(result ?: "Songs skipping, wrong song, anything odd — sends what you write and the app's recent log", style = W.ui(12.sp), color = W.text2)
+        }
+        Pill("Report") { open = true; result = null }
+    }
+    if (open) AlertDialog(
+        modifier = Modifier.padding(horizontal = 28.dp), properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        onDismissRequest = { if (!sending) open = false }, containerColor = Color(0xF2141219), shape = RoundedCornerShape(W.Radius.card),
+        title = { Text("Report a problem", style = W.ui(20.sp, FontWeight.Bold)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("What happened, and roughly when? The app's recent log (songs played, errors) and your phone model go with it.", style = W.ui(13.sp), color = W.text2)
+                GlassField(text, { text = it }, "e.g. songs skip after a few seconds")
+                GlassField(name, { name = it }, "Your name (optional)")
+                if (sending) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = W.lilac, trackColor = W.hairline)
+                result?.let { Text(it, style = W.ui(13.sp), color = W.peach) }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                sending = true
+                scope.launch {
+                    val err = BugReport.send(text.trim(), name.trim())
+                    sending = false
+                    if (err == null) { open = false; text = ""; result = "Sent — thanks!" } else result = err
+                }
+            }, enabled = text.isNotBlank() && !sending) { Text(if (sending) "Sending…" else "Send", color = if (text.isNotBlank()) W.lilac else W.text3) }
+        },
+        dismissButton = { TextButton({ open = false }, enabled = !sending) { Text("Cancel", color = W.text2) } },
+    )
 }
 
 /**
