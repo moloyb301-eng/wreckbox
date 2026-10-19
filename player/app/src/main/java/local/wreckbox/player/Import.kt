@@ -52,18 +52,39 @@ object Import {
         val h = History.get(c)
         val items = YouTubeMusic.history()
         val liked = runCatching { YouTubeMusic.liked() }.getOrDefault(emptyList())
-        // The page has no times, only "Today", "Yesterday", "This week"…: only the songs above the newest one we saw last
-        // time are new, and each gets a time inside its section.
+        // The page has no times, only "Today", "Yesterday", "This week"…: only the songs above the ones we saw last time
+        // are new, and each gets a time inside its section.
         val p = prefs(c)
-        val lastTop = p.getString("ytTop", null)
-        val fresh = items.takeWhile { it.second.id != lastTop }
+        val seen = p.getString("ytSeen", null)?.split(',')?.filter { it.isNotEmpty() } ?: listOfNotNull(p.getString("ytTop", null))
+        val fresh = items.take(newAbove(items.map { it.second.id }, seen))
         val now = System.currentTimeMillis()
+        // Songs played here also land in that history (the YouTube page is signed in): they're counted already, skips too.
+        val lastAt = p.getLong("ytAt", 0)
+        val counted = h.data.value.songs
         val plays = fresh.mapIndexed { i, (section, t) -> History.Play(t, sectionTime(section, now) - i * 60_000L, t.durationMs) }
+            .filter { lastAt == 0L || (counted[History.name(it.track)]?.lastAt ?: 0) <= lastAt }
         val added = h.importPlays("youtube", plays, newerOnly = false)
         h.importFavourites("youtube-liked", liked, 1.0)
-        p.edit().putLong("ytAt", now).apply { items.firstOrNull()?.let { putString("ytTop", it.second.id) } }.apply()
+        p.edit().putLong("ytAt", now).apply { if (items.isNotEmpty()) putString("ytSeen", items.take(50).joinToString(",") { it.second.id }) }.apply()
         status.value = "YouTube Music: $added new plays, ${liked.size} liked songs"
         return added
+    }
+
+    /**
+     * How many songs at the top of the history are new since [seen] (the list's top last time). A song played again moves
+     * back to the top — whether or not the page still lists its older play — so the old list is looked for further down,
+     * not just its first song.
+     */
+    private fun newAbove(ids: List<String>, seen: List<String>): Int {
+        if (seen.isEmpty()) return ids.size
+        for (k in ids.indices) {
+            val rest = ids.drop(k)
+            val moved = ids.take(k).toSet()
+            val left = seen.filter { it !in moved }
+            fun follows(old: List<String>) = minOf(5, rest.size, old.size).let { n -> n > 0 && rest.take(n) == old.take(n) }
+            if (follows(seen) || follows(left)) return k
+        }
+        return ids.size
     }
 
     private fun sectionTime(section: String, now: Long): Long {
