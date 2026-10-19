@@ -70,7 +70,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (current()?.source != Source.LOCAL) return
-                if (state == Player.STATE_READY) buffering = false
+                if (state == Player.STATE_READY) { buffering = false; failures = 0 }
                 if (state == Player.STATE_ENDED) trackEnded() else refresh()
             }
 
@@ -378,6 +378,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         if (!st.paused && (st.position > 0.5 || (st.hasMedia && s != Service.SPOTIFY))) buffering = false
         // A reload after a stall: back to where the song was.
         if (resumeAt > 0 && !buffering && !st.ad) { engine()?.seek(resumeAt); songPos = resumeAt; resumeAt = 0.0 }
+        if (!st.paused && !st.ad && st.position > 3) failures = 0
         // The service moved on by itself (autoplay after our song, without an ended event): that was the end.
         val wrapped = !st.ad && songDur > 5 && songPos > songDur - 4 && st.position < 2
         val now = System.currentTimeMillis()
@@ -523,11 +524,18 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         }
     }
 
+    /** Songs in a row that didn't play: after a few, stop instead of failing through the queue (and radio) for hours. */
+    private var failures = 0
+
     private fun failed(why: String) {
         event("failed: $why")
         message = why
         buffering = false
-        if (index + 1 < queue.size) { index++; startCurrent() } else { playWhenReady = false; onWebPlaying(false); refresh() }
+        if (++failures >= 3) {
+            failures = 0
+            message = "$why — stopped after 3 songs in a row didn't play"
+            pauseNow()
+        } else if (index + 1 < queue.size) { index++; startCurrent() } else { playWhenReady = false; onWebPlaying(false); refresh() }
     }
 
     private fun shuffleUpcoming(on: Boolean) {
