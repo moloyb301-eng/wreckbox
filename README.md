@@ -9,7 +9,7 @@ DJ library manager: your Spotify and YouTube playlists become one library; track
 | BPM / key / energy analysis | ✓ | ✓ |
 | Writes title, artists, album, BPM, key, ISRC, cover into the files | ✓ | ✓ |
 | Organises downloads into `Music/WreckBox/Tracks` ("Artist - Title.ext") | ✓ | ✓ (watches Download/) |
-| Soulseek sync with download queue, retries, results | ✓ | – |
+| Missing-track sync with download queue, retries and results | ✓ | – |
 | Send tracks computer → phone over Wi-Fi (QR pairing) | ✓ (shares) | ✓ (receives) |
 | Dropbox import | – | ✓ |
 | In-app bug reports with screenshots | ✓ | ✓ |
@@ -20,7 +20,7 @@ DJ library manager: your Spotify and YouTube playlists become one library; track
 ```
 core/      Rust engine (decoding, analysis, tag writing) — shared by every platform, C ABI for Dart
 app/       Flutter app (Windows, macOS, Android)
-sidecar/   slsk_sync.py — the Soulseek downloader (bundled with an embedded Python on desktop)
+sidecar/   slsk_sync.py — the track sync helper (bundled with an embedded Python on desktop)
 relay/     Cloudflare Worker: bug reports → GitHub issues (→ email)
 docs/      Friend guide and release guide
 .github/   CI: tests, Windows / Mac / Android builds, releases to the public releases repo
