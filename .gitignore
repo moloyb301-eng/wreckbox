@@ -23,3 +23,8 @@ api/.wrangler/
 car/build/
 car/dist/
 player/.kotlin/
+
+# WreckBox Player for iPhone (Xcode)
+ios/build/
+ios/Unused/
+xcuserdata/
