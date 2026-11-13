@@ -17,7 +17,19 @@ const REPORTS_PER_IP_PER_HOUR = 10;
 
 export default {
   async fetch(request, env) {
-    if (request.method === "GET") return json({ ok: true, service: "wreckbox-bug-relay" });
+    if (request.method === "GET") {
+      // /check (with the app key): can the token see the repo and its issues? GitHub's own answer, for setup problems.
+      if (new URL(request.url).pathname === "/check" && request.headers.get("X-WreckBox-Key") === env.APP_KEY) {
+        const repo = await gh(env, `/repos/${env.GITHUB_REPO}`, "GET");
+        const issues = await gh(env, `/repos/${env.GITHUB_REPO}/issues?per_page=1`, "GET");
+        const me = await gh(env, "/user", "GET");
+        const msg = async (r) => (r.ok ? "ok" : (await r.json().catch(() => ({}))).message || "");
+        return json({ ok: repo.ok && issues.ok, repo: env.GITHUB_REPO, repoStatus: repo.status, repoMessage: await msg(repo),
+          issuesStatus: issues.status, issuesMessage: await msg(issues), tokenExpires: repo.headers.get("github-authentication-token-expiration"),
+          tokenUser: me.ok ? (await me.json()).login : `(${me.status})` });
+      }
+      return json({ ok: true, service: "wreckbox-bug-relay" });
+    }
     if (request.method !== "POST") return json({ ok: false, error: "POST a report" }, 405);
     if (request.headers.get("X-WreckBox-Key") !== env.APP_KEY) return json({ ok: false, error: "unauthorised" }, 401);
 
@@ -75,7 +87,7 @@ export default {
       body,
       labels: ["bug", "from-app", clip(report.platform || "unknown", 30).split(" ")[0].toLowerCase()],
     });
-    if (!issue.ok) return json({ ok: false, error: `GitHub said ${issue.status}` }, 502);
+    if (!issue.ok) return json({ ok: false, error: `GitHub said ${issue.status}: ${(await issue.json().catch(() => ({}))).message || ""}` }, 502);
     const created = await issue.json();
     return json({ ok: true, id, issue: created.number });
   },
@@ -99,6 +111,6 @@ function gh(env, path, method, body) {
       "user-agent": "wreckbox-bug-relay",
       "x-github-api-version": "2022-11-28",
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 }

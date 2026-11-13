@@ -479,9 +479,9 @@ fun SettingsSheet(close: () -> Unit) {
                     else Pill("Allow") { c.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${c.packageName}"))) }
                 }
                 Spacer(Modifier.height(10.dp))
-                // The island round the camera (phones with a hole-punch camera)
+                // The island round the camera (phones with a hole-punch camera) — island builds only
                 val islandOn by Island.enabled.collectAsState()
-                Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (BuildConfig.ISLAND) Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Island round the camera", style = W.ui(15.sp, FontWeight.SemiBold))
                         Text(if (Island.allowed(c)) "While music plays outside the app: the song on an LED screen beside the camera; tap it for the player, ✕ to put it away until you play again. It also goes after 55 s without music. The player's notification card is hidden while it shows."
@@ -492,7 +492,7 @@ fun SettingsSheet(close: () -> Unit) {
                     if (!Island.allowed(c)) Pill("Turn on") { c.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                     else Switch(islandOn, { Island.setEnabled(c, it) }, colors = SwitchDefaults.colors(checkedTrackColor = W.lilac, checkedThumbColor = Color.White))
                 }
-                Spacer(Modifier.height(10.dp))
+                if (BuildConfig.ISLAND) Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Autoplay similar songs", style = W.ui(15.sp, FontWeight.SemiBold))
@@ -510,9 +510,54 @@ fun SettingsSheet(close: () -> Unit) {
                     Switch(adblock, { adblock = it; AdBlock.enabled = it; prefs.edit().putBoolean("adblock", it).apply() },
                         colors = SwitchDefaults.colors(checkedTrackColor = W.lilac, checkedThumbColor = Color.White))
                 }
+                DotLabel("Help", Modifier.padding(top = 18.dp, bottom = 10.dp))
+                ReportProblem()
             }
         }
     }
+}
+
+/** Settings → Report a problem: a note + the app's recent log, sent to the developer (BugReport). */
+@Composable
+fun ReportProblem() {
+    var open by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Report a problem", style = W.ui(15.sp, FontWeight.SemiBold))
+            Text(result ?: "Songs skipping, wrong song, anything odd — sends what you write and the app's recent log", style = W.ui(12.sp), color = W.text2)
+        }
+        Pill("Report") { open = true; result = null }
+    }
+    if (open) AlertDialog(
+        modifier = Modifier.padding(horizontal = 28.dp), properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        onDismissRequest = { if (!sending) open = false }, containerColor = Color(0xF2141219), shape = RoundedCornerShape(W.Radius.card),
+        title = { Text("Report a problem", style = W.ui(20.sp, FontWeight.Bold)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("What happened, and roughly when? The app's recent log (songs played, errors) and your phone model go with it.", style = W.ui(13.sp), color = W.text2)
+                GlassField(text, { text = it }, "e.g. songs skip after a few seconds")
+                GlassField(name, { name = it }, "Your name (optional)")
+                if (sending) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = W.lilac, trackColor = W.hairline)
+                result?.let { Text(it, style = W.ui(13.sp), color = W.peach) }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                sending = true
+                scope.launch {
+                    val err = BugReport.send(text.trim(), name.trim())
+                    sending = false
+                    if (err == null) { open = false; text = ""; result = "Sent — thanks!" } else result = err
+                }
+            }, enabled = text.isNotBlank() && !sending) { Text(if (sending) "Sending…" else "Send", color = if (text.isNotBlank()) W.lilac else W.text3) }
+        },
+        dismissButton = { TextButton({ open = false }, enabled = !sending) { Text("Cancel", color = W.text2) } },
+    )
 }
 
 /**

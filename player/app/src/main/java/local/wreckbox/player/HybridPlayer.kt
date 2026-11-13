@@ -109,7 +109,9 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         val first = if (shuffled) tracks.random() else tracks.getOrNull(start.coerceIn(tracks.indices))
         queue = tracks.distinctBy { it.key }
         index = queue.indexOfFirst { it.key == first?.key }.coerceAtLeast(0)
-        if (shuffled) shuffleUpcoming(true) else _shuffle = false
+        _shuffle = false // a new list: shuffle (if asked) starts over, else a second Shuffle press left the rest in order
+        if (shuffled) shuffleUpcoming(true)
+        event("new list of ${tracks.size}: asked #$start ${tracks.getOrNull(start)?.key}, shuffled=$shuffled → #$index ${current()?.key}")
         playWhenReady = true
         startCurrent()
     }
@@ -188,7 +190,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         when (current()?.source) {
             null -> {}
             Source.LOCAL -> exo.seekTo(ms)
-            else -> engine()?.seek(ms / 1000.0)
+            else -> { engine()?.seek(ms / 1000.0); songPos = ms / 1000.0 } // a jump back to 0:00 isn't the song wrapping round
         }
         refresh()
     }
@@ -277,6 +279,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
 
     private fun startCurrent() {
         val t = current() ?: return
+        Debug.log("START #$index ${t.key} ${t.title} — ${t.artist}")
         logHeard()
         heardTrack = t
         heardMs = 0
@@ -289,6 +292,10 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         seenV = null
         lastMoved = startedAt
         nudged = false
+        songPos = 0.0
+        songDur = 0.0
+        reloaded = false
+        resumeAt = 0.0
         val svc = service(t)
         warmUpcoming()
         mainHandler.removeCallbacks(parkIdle)
@@ -342,6 +349,18 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     private var baseDur = 0.0 // the page's duration for the song we started (YouTube can stretch it when it glides on)
     private var lastMoved = 0L
     private var nudged = false
+    // Where our song itself is (ads left out): an "end" only counts near the song's real end. (A skipped ad jumps to
+    // its own end and fires "ended" — taken for the song's end, that skipped songs by themselves.)
+    private var songPos = 0.0
+    private var songDur = 0.0
+    private var reloaded = false // a stalled / wandered-off song gets one reload at its place before it's given up
+    private var resumeAt = 0.0
+
+    private fun nearEnd(t: Track): Boolean {
+        // The shortest length we know: YouTube stretches the page's duration when it glides into the next song.
+        val d = listOf(songDur, baseDur, t.durationMs / 1000.0).filter { it > 0 }.minOrNull() ?: 0.0
+        return if (d > 0) songPos >= d - 10 else songPos > 60
+    }
 
     private fun onWebState(s: Service, st: WebState) {
         val t = current()
@@ -349,15 +368,24 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         // Started = the song's clock moves. (Spotify's bar says "playing" at 0:00 while its copy protection loads — that's
         // still starting, not a stall.)
         if (!st.paused && (st.position > 0.5 || (st.hasMedia && s != Service.SPOTIFY))) buffering = false
+        // A reload after a stall: back to where the song was.
+        if (resumeAt > 0 && !buffering && !st.ad) { engine()?.seek(resumeAt); songPos = resumeAt; resumeAt = 0.0 }
         // The service moved on by itself (autoplay after our song, without an ended event): that was the end.
-        val wrapped = lastDur > 5 && lastPos > lastDur - 4 && st.position < 2 && !st.ad
+        val wrapped = !st.ad && songDur > 5 && songPos > songDur - 4 && st.position < 2
         val now = System.currentTimeMillis()
         // YouTube Music also glides into the next song on the same stream (position keeps counting, no ended event):
         // the page's video id is no longer ours and we're at/after our song's end.
         if (baseDur <= 0 && st.duration > 0 && st.position < 30 && !st.ad) baseDur = st.duration
         if (s == Service.YOUTUBE && !st.ad && now - startedAt > 5000) {
             val v = Regex("[?&]v=([^&#]+)").find(st.url)?.groupValues?.get(1)
-            if (v != null) { if (seenV == null) seenV = v else if (v != seenV) return onWebEnded(s, "video id changed") }
+            if (v != null) {
+                if (seenV == null) seenV = v
+                else if (v != seenV) {
+                    if (nearEnd(t)) return onWebEnded(s, "video id changed")
+                    // Mid-song the page went to another video: ours, again, at its place (never the page's pick).
+                    return if (songPos < 5) failed("YouTube couldn't play this song") else reload("the page went to another video")
+                }
+            }
             val ours = if (t.durationMs > 0) t.durationMs / 1000.0 else baseDur
             if (v != null && v != t.id && ours > 0 && st.position >= ours - 5) return onWebEnded(s, "glided into the next video")
         }
@@ -365,12 +393,13 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         if (st.position != lastPos || st.paused || st.ad) lastMoved = now
         lastPos = st.position
         lastDur = st.duration
+        if (!st.ad && resumeAt <= 0 && st.duration > 0) { songPos = st.position; songDur = st.duration }
         if (wrapped && now - startedAt > 5000) return onWebEnded(s, "clock wrapped to 0")
         // "Playing" but the clock stopped: near the end that's the end (Spotify can stall in its last seconds);
-        // mid-song, nudge it once, then give up on it.
+        // mid-song (usually a weak connection), nudge it, then reload it at its place once, then give up on it.
         if (playWhenReady && !buffering && st.duration > 0 && now - lastMoved > 6000) {
             if (st.position > st.duration - 12) return onWebEnded(s, "stalled near the end")
-            if (now - lastMoved > 20_000) return failed("The song stalled")
+            if (now - lastMoved > 30_000) return reload("the song stalled")
             if (!nudged) { nudged = true; engine()?.play() }
         }
         // Nothing playing 25 s after we asked: say so and go on.
@@ -391,7 +420,27 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
         val t = current() ?: return
         if (service(t) != s) return
         if (System.currentTimeMillis() - startedAt < 4000) return // a previous song's end arriving late
+        // Not near the song's end: an ad's end, or the page's own blip — not ours. Keep playing.
+        // (If it really stopped, the stall check above takes it from there.)
+        if (!nearEnd(t)) { event("ignored end at ${songPos.toInt()}/${songDur.toInt()} s"); if (playWhenReady) engine()?.play(); return }
         trackEnded()
+    }
+
+    /** Loads the current song's page again and goes back to where it was; the second time, it's given up on. */
+    private fun reload(why: String) {
+        val t = current() ?: return
+        val svc = service(t) ?: return
+        if (reloaded || songPos < 5) return failed(why.replaceFirstChar { it.uppercase() })
+        event("reload at ${songPos.toInt()} s: $why")
+        reloaded = true
+        resumeAt = songPos
+        buffering = true
+        startedAt = System.currentTimeMillis()
+        lastMoved = startedAt
+        nudged = false
+        seenV = null
+        if (playWhenReady) engineFor(svc).playTrack(t.id)
+        refresh()
     }
 
     /**
@@ -658,10 +707,7 @@ class HybridPlayer(private val context: Context, private val onWebPlaying: (Bool
     }
 
     /** A line in player.log (for testing over USB): why a song ended or was skipped. */
-    private fun event(what: String) = runCatching {
-        java.io.File(context.getExternalFilesDir(null), "player.log").appendText(
-            "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} EVENT $what (${current()?.title}, ${positionMs() / 1000}s)\n")
-    }
+    private fun event(what: String) = Debug.log("EVENT $what (${current()?.title}, ${positionMs() / 1000}s)")
 
     /** The playing page's raw state, for the log. */
     fun webDebug(): String = engine()?.last?.let { "page paused=${it.paused} media=${it.hasMedia} ad=${it.ad} buffering=$buffering want=$playWhenReady hiccups=${it.hiccups} waits=${it.waits}" } ?: "local"
