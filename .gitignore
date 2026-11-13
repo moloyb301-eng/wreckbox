@@ -23,3 +23,8 @@ api/.wrangler/
 car/build/
 car/dist/
 player/.kotlin/
+
+# WreckBox Player for Mac (Swift package)
+player-mac/build/
+player-mac/.build/
+player-mac/.swiftpm/
