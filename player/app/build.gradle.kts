@@ -14,11 +14,12 @@ android {
         applicationId = "local.wreckbox.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.1"
+        versionCode = 7
+        versionName = "0.3.2"
         // USB test commands (MainActivity.test), WebView debugging and player.log: only in test builds
         // (./gradlew assembleRelease -PwbTest), never in the builds friends download.
         buildConfigField("boolean", "TEST_COMMANDS", if (project.hasProperty("wbTest")) "true" else "false")
+        buildConfigField("boolean", "ISLAND", "false")
     }
 
     // Signed with the WreckBox release key (the main app's: app/android/key.properties, kept out of the repo) so
@@ -42,6 +43,14 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
+        // The island round the camera needs an accessibility service, and Play Protect blocks installing any downloaded
+        // app that has one (fraud protection) — so only this build carries it (src/island), for phones set up over USB:
+        // ./gradlew assembleIsland. The release build (what friends download) leaves it out.
+        create("island") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "ISLAND", "true")
         }
     }
     buildFeatures { compose = true; buildConfig = true }

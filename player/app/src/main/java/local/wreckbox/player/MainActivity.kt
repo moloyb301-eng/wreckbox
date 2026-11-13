@@ -479,9 +479,9 @@ fun SettingsSheet(close: () -> Unit) {
                     else Pill("Allow") { c.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${c.packageName}"))) }
                 }
                 Spacer(Modifier.height(10.dp))
-                // The island round the camera (phones with a hole-punch camera)
+                // The island round the camera (phones with a hole-punch camera) — island builds only
                 val islandOn by Island.enabled.collectAsState()
-                Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (BuildConfig.ISLAND) Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Island round the camera", style = W.ui(15.sp, FontWeight.SemiBold))
                         Text(if (Island.allowed(c)) "While music plays outside the app: the song on an LED screen beside the camera; tap it for the player, ✕ to put it away until you play again. It also goes after 55 s without music. The player's notification card is hidden while it shows."
@@ -492,7 +492,7 @@ fun SettingsSheet(close: () -> Unit) {
                     if (!Island.allowed(c)) Pill("Turn on") { c.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                     else Switch(islandOn, { Island.setEnabled(c, it) }, colors = SwitchDefaults.colors(checkedTrackColor = W.lilac, checkedThumbColor = Color.White))
                 }
-                Spacer(Modifier.height(10.dp))
+                if (BuildConfig.ISLAND) Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp)).padding(14.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Autoplay similar songs", style = W.ui(15.sp, FontWeight.SemiBold))
