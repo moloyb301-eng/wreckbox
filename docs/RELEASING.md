@@ -7,7 +7,7 @@
    - `wreckbox-bugs` (private): bug reports from the apps (issues + screenshots), so friends' details stay private.
    - `wreckbox-releases` (public): only release files. The apps check its latest release for updates.
 2. **App config** — `app/lib/config.dart`: set `releasesRepo`, `bugRelayUrl`, `bugRelayKey`.
-3. **GitHub Actions secrets / variables** (private repo → Settings → Secrets and variables → Actions):
+3. **GitHub Actions secrets / variables** (repo → Settings → Secrets and variables → Actions):
    - `ANDROID_KEYSTORE_B64`: `base64 -i secrets/wreckbox-release.jks | pbcopy`
    - `ANDROID_KEY_PASSWORD`: the password in `app/android/key.properties`
    - `RELEASES_TOKEN`: fine-grained token, repository `wreckbox-releases`, Contents: read & write
@@ -30,9 +30,10 @@ uninstall (losing settings) and reinstall.
 ## Publishing an update
 
 1. Bump `version:` in `app/pubspec.yaml` (e.g. `0.2.0+2` — the number after `+` must go up for Android).
-2. Commit, then tag and push:
+2. Merge that change into `main` through a pull request (see [HOW-WE-WORK.md](HOW-WE-WORK.md)), then tag `main` and push the tag:
    ```sh
-   git tag v0.2.0 && git push origin main v0.2.0
+   git checkout main && git pull
+   git tag v0.2.0 && git push origin v0.2.0
    ```
 3. GitHub Actions runs the tests, builds Android and Windows and publishes release vX.Y.Z to `wreckbox-releases`.
    Phones see "WreckBox X.Y.Z is available" when the app opens.
